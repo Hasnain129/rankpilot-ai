@@ -1,0 +1,279 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user account and workspace profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "companyName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["member"] },
+        "plan": { "type": "string", "enum": ["free"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "plan", "createdAt", "updatedAt"]
+    },
+    "Website": {
+      "title": "Website",
+      "description": "Connected website tracked and analyzed by a user",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "url": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "domain": { "type": "string", "minLength": 3, "maxLength": 253 },
+        "industry": { "type": "string", "maxLength": 80 },
+        "trackingId": { "type": "string", "minLength": 6, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "seoScore": { "type": "number" },
+        "pagesScanned": { "type": "integer" },
+        "status": { "type": "string", "enum": ["active", "paused"] },
+        "lastScannedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "url", "domain", "trackingId", "seoScore", "pagesScanned", "status", "createdAt", "updatedAt"]
+    },
+    "TrackingKey": {
+      "title": "TrackingKey",
+      "description": "Publicly resolvable mapping from trackingId to websiteId and ownerId without PII",
+      "type": "object",
+      "properties": {
+        "trackingId": { "type": "string", "minLength": 6, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "domain": { "type": "string", "minLength": 3, "maxLength": 253 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["trackingId", "websiteId", "ownerId", "domain", "createdAt"]
+    },
+    "SeoAudit": {
+      "title": "SeoAudit",
+      "description": "Technical SEO crawl and Gemini AI optimization report for a website URL",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "url": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "score": { "type": "integer" },
+        "loadTimeMs": { "type": "integer" },
+        "httpStatus": { "type": "integer" },
+        "title": { "type": "string", "maxLength": 300 },
+        "metaDescription": { "type": "string", "maxLength": 600 },
+        "h1Count": { "type": "integer" },
+        "h2Count": { "type": "integer" },
+        "h3Count": { "type": "integer" },
+        "wordCount": { "type": "integer" },
+        "totalImages": { "type": "integer" },
+        "missingAltCount": { "type": "integer" },
+        "internalLinks": { "type": "integer" },
+        "externalLinks": { "type": "integer" },
+        "brokenLinksCount": { "type": "integer" },
+        "brokenLinks": { "type": "array" },
+        "hasViewport": { "type": "boolean" },
+        "hasCanonical": { "type": "boolean" },
+        "hasOpenGraph": { "type": "boolean" },
+        "mobileFriendly": { "type": "boolean" },
+        "issues": { "type": "array" },
+        "recommendations": { "type": "array" },
+        "summary": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "websiteId", "url", "score", "loadTimeMs", "httpStatus",
+        "title", "metaDescription", "h1Count", "h2Count", "h3Count", "wordCount",
+        "totalImages", "missingAltCount", "internalLinks", "externalLinks",
+        "brokenLinksCount", "hasViewport", "hasCanonical", "hasOpenGraph",
+        "mobileFriendly", "issues", "recommendations", "summary", "createdAt"
+      ]
+    },
+    "KeywordResearch": {
+      "title": "KeywordResearch",
+      "description": "AI-generated keyword research and topic cluster project",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "maxLength": 128 },
+        "seedKeyword": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "targetMarket": { "type": "string", "maxLength": 80 },
+        "relatedKeywords": { "type": "array" },
+        "longTailKeywords": { "type": "array" },
+        "clusters": { "type": "array" },
+        "contentIdeas": { "type": "array" },
+        "suggestedTitles": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "seedKeyword", "relatedKeywords", "longTailKeywords", "clusters", "contentIdeas", "suggestedTitles", "createdAt"]
+    },
+    "GeneratedContent": {
+      "title": "GeneratedContent",
+      "description": "Editable and saved AI-generated SEO content",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "maxLength": 128 },
+        "contentType": { "type": "string", "enum": ["blog", "meta_title", "meta_description", "product_description", "landing_page", "faq"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "targetKeyword": { "type": "string", "maxLength": 160 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 25000 },
+        "metaTitle": { "type": "string", "maxLength": 160 },
+        "metaDescription": { "type": "string", "maxLength": 320 },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "contentType", "title", "body", "status", "createdAt", "updatedAt"]
+    },
+    "VisitorEvent": {
+      "title": "VisitorEvent",
+      "description": "Tracked visitor pageview, session, or conversion event",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "trackingId": { "type": "string", "minLength": 6, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "visitorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "eventType": { "type": "string", "enum": ["pageview", "conversion", "lead_submit", "quote_request"] },
+        "path": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "referrer": { "type": "string", "maxLength": 500 },
+        "trafficSource": { "type": "string", "maxLength": 80 },
+        "utmSource": { "type": "string", "maxLength": 120 },
+        "utmMedium": { "type": "string", "maxLength": 120 },
+        "utmCampaign": { "type": "string", "maxLength": 120 },
+        "deviceType": { "type": "string", "enum": ["desktop", "mobile", "tablet"] },
+        "conversionValue": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "trackingId", "visitorId", "sessionId", "eventType", "path", "trafficSource", "deviceType", "conversionValue", "createdAt"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "Customer lead captured or entered for a website",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "company": { "type": "string", "maxLength": 140 },
+        "leadSource": { "type": "string", "enum": ["Organic Search", "Direct", "Referral", "Paid Search", "Social", "Email", "Website Form"] },
+        "status": { "type": "string", "enum": ["New", "Contacted", "Qualified", "Converted", "Lost"] },
+        "estimatedValue": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "trackingSource": { "type": "string", "enum": ["tracked", "manual"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "name", "email", "leadSource", "status", "estimatedValue", "trackingSource", "createdAt", "updatedAt"]
+    },
+    "Quote": {
+      "title": "Quote",
+      "description": "Customer quote request and proposal status",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "leadId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "customerEmail": { "type": "string", "format": "email", "maxLength": 254 },
+        "serviceOrProduct": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 6 },
+        "status": { "type": "string", "enum": ["Pending", "Sent", "Accepted", "Rejected"] },
+        "validUntil": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "customerName", "customerEmail", "serviceOrProduct", "amount", "currency", "status", "createdAt", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order and revenue record",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderNumber": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "customerName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "customerEmail": { "type": "string", "format": "email", "maxLength": 254 },
+        "productOrService": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 6 },
+        "channel": { "type": "string", "enum": ["Organic Search", "Direct", "Referral", "Paid Search", "Social", "Manual Entry", "Shopify", "WooCommerce"] },
+        "entrySource": { "type": "string", "enum": ["tracked_conversion", "manual_entry", "shopify_sync", "woocommerce_sync"] },
+        "status": { "type": "string", "enum": ["Pending", "Processing", "Completed", "Refunded"] },
+        "orderDate": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "orderNumber", "customerName", "customerEmail", "productOrService", "amount", "currency", "channel", "entrySource", "status", "orderDate", "createdAt", "updatedAt"]
+    },
+    "IntegrationConfig": {
+      "title": "IntegrationConfig",
+      "description": "External platform integration configuration and setup tracking",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider": { "type": "string", "enum": ["google_search_console", "google_analytics_4", "google_pagespeed", "shopify", "woocommerce"] },
+        "status": { "type": "string", "enum": ["not_connected", "configured"] },
+        "identifier": { "type": "string", "maxLength": 254 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "provider", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user account profile isolated per authenticated UID"
+    },
+    "/websites/{websiteId}": {
+      "schema": { "$ref": "#/entities/Website" },
+      "description": "Websites owned by an authenticated user"
+    },
+    "/trackingKeys/{trackingId}": {
+      "schema": { "$ref": "#/entities/TrackingKey" },
+      "description": "Tracking key lookup records without PII for visitor event verification"
+    },
+    "/seoAudits/{auditId}": {
+      "schema": { "$ref": "#/entities/SeoAudit" },
+      "description": "Technical SEO audits scoped by ownerId and websiteId"
+    },
+    "/keywordProjects/{keywordId}": {
+      "schema": { "$ref": "#/entities/KeywordResearch" },
+      "description": "Saved AI keyword research sessions scoped by ownerId"
+    },
+    "/generatedContents/{contentId}": {
+      "schema": { "$ref": "#/entities/GeneratedContent" },
+      "description": "Saved and editable AI content assets scoped by ownerId"
+    },
+    "/visitorEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/VisitorEvent" },
+      "description": "Visitor pageviews and conversion events scoped by ownerId and websiteId"
+    },
+    "/leads/{leadId}": {
+      "schema": { "$ref": "#/entities/Lead" },
+      "description": "Customer leads scoped by ownerId and websiteId"
+    },
+    "/quotes/{quoteId}": {
+      "schema": { "$ref": "#/entities/Quote" },
+      "description": "Customer quote requests scoped by ownerId and websiteId"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer orders and revenue scoped by ownerId and websiteId"
+    },
+    "/integrations/{integrationId}": {
+      "schema": { "$ref": "#/entities/IntegrationConfig" },
+      "description": "External integration settings scoped by ownerId and websiteId"
+    }
+  }
+}

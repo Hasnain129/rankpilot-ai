@@ -1,0 +1,522 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net — deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Hardened Helpers
+    // -------------------------------------------------------------------------
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isStr(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function ownsWebsite(websiteId) {
+      return isValidId(websiteId)
+        && exists(/databases/$(database)/documents/websites/$(websiteId))
+        && get(/databases/$(database)/documents/websites/$(websiteId)).data.ownerId == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints (Called on BOTH create and update)
+    // -------------------------------------------------------------------------
+
+    function isValidUserProfile(data) {
+      return data.uid is string
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && isStr(data.email, 3, 254)
+        && isStr(data.displayName, 1, 120)
+        && (!('companyName' in data) || isStr(data.companyName, 0, 120))
+        && data.role == 'member'
+        && data.plan == 'free'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWebsite(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isStr(data.name, 1, 120)
+        && isStr(data.url, 4, 500)
+        && isStr(data.domain, 3, 253)
+        && (!('industry' in data) || isStr(data.industry, 0, 80))
+        && isValidId(data.trackingId)
+        && data.trackingId.size() >= 6
+        && data.trackingId.size() <= 64
+        && data.seoScore is number
+        && data.seoScore >= 0
+        && data.seoScore <= 100
+        && data.pagesScanned is int
+        && data.pagesScanned >= 0
+        && data.pagesScanned <= 100000
+        && data.status in ['active', 'paused']
+        && (!('lastScannedAt' in data) || isStr(data.lastScannedAt, 0, 64))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTrackingKey(data) {
+      return isValidId(data.trackingId)
+        && data.trackingId.size() >= 6
+        && data.trackingId.size() <= 64
+        && isValidId(data.websiteId)
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isStr(data.domain, 3, 253)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSeoAudit(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && isStr(data.url, 4, 500)
+        && data.score is int
+        && data.score >= 0
+        && data.score <= 100
+        && data.loadTimeMs is int
+        && data.loadTimeMs >= 0
+        && data.loadTimeMs <= 120000
+        && data.httpStatus is int
+        && data.httpStatus >= 0
+        && data.httpStatus <= 599
+        && isStr(data.title, 0, 300)
+        && isStr(data.metaDescription, 0, 600)
+        && data.h1Count is int && data.h1Count >= 0 && data.h1Count <= 1000
+        && data.h2Count is int && data.h2Count >= 0 && data.h2Count <= 5000
+        && data.h3Count is int && data.h3Count >= 0 && data.h3Count <= 5000
+        && data.wordCount is int && data.wordCount >= 0 && data.wordCount <= 500000
+        && data.totalImages is int && data.totalImages >= 0 && data.totalImages <= 5000
+        && data.missingAltCount is int && data.missingAltCount >= 0 && data.missingAltCount <= 5000
+        && data.internalLinks is int && data.internalLinks >= 0 && data.internalLinks <= 20000
+        && data.externalLinks is int && data.externalLinks >= 0 && data.externalLinks <= 20000
+        && data.brokenLinksCount is int && data.brokenLinksCount >= 0 && data.brokenLinksCount <= 1000
+        && (!('brokenLinks' in data) || (data.brokenLinks is list && data.brokenLinks.size() <= 20 && (data.brokenLinks.size() == 0 || data.brokenLinks[0] is string)))
+        && data.hasViewport is bool
+        && data.hasCanonical is bool
+        && data.hasOpenGraph is bool
+        && data.mobileFriendly is bool
+        && data.issues is list && data.issues.size() <= 30 && (data.issues.size() == 0 || data.issues[0] is map)
+        && data.recommendations is list && data.recommendations.size() <= 20 && (data.recommendations.size() == 0 || data.recommendations[0] is map)
+        && isStr(data.summary, 0, 2000)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidKeywordResearch(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && (!('websiteId' in data) || isStr(data.websiteId, 0, 128))
+        && isStr(data.seedKeyword, 1, 160)
+        && (!('targetMarket' in data) || isStr(data.targetMarket, 0, 80))
+        && data.relatedKeywords is list && data.relatedKeywords.size() <= 25 && (data.relatedKeywords.size() == 0 || data.relatedKeywords[0] is map)
+        && data.longTailKeywords is list && data.longTailKeywords.size() <= 25 && (data.longTailKeywords.size() == 0 || data.longTailKeywords[0] is map)
+        && data.clusters is list && data.clusters.size() <= 15 && (data.clusters.size() == 0 || data.clusters[0] is map)
+        && data.contentIdeas is list && data.contentIdeas.size() <= 15 && (data.contentIdeas.size() == 0 || data.contentIdeas[0] is map)
+        && data.suggestedTitles is list && data.suggestedTitles.size() <= 15 && (data.suggestedTitles.size() == 0 || data.suggestedTitles[0] is string)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidGeneratedContent(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && (!('websiteId' in data) || isStr(data.websiteId, 0, 128))
+        && data.contentType in ['blog', 'meta_title', 'meta_description', 'product_description', 'landing_page', 'faq']
+        && isStr(data.title, 1, 240)
+        && (!('targetKeyword' in data) || isStr(data.targetKeyword, 0, 160))
+        && isStr(data.body, 1, 25000)
+        && (!('metaTitle' in data) || isStr(data.metaTitle, 0, 160))
+        && (!('metaDescription' in data) || isStr(data.metaDescription, 0, 320))
+        && data.status in ['draft', 'published']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVisitorEvent(data) {
+      return isValidId(data.ownerId)
+        && isValidId(data.websiteId)
+        && isValidId(data.trackingId)
+        && data.trackingId.size() >= 6
+        && data.trackingId.size() <= 64
+        && isStr(data.visitorId, 1, 128)
+        && isStr(data.sessionId, 1, 128)
+        && data.eventType in ['pageview', 'conversion', 'lead_submit', 'quote_request']
+        && isStr(data.path, 1, 500)
+        && (!('referrer' in data) || isStr(data.referrer, 0, 500))
+        && isStr(data.trafficSource, 1, 80)
+        && (!('utmSource' in data) || isStr(data.utmSource, 0, 120))
+        && (!('utmMedium' in data) || isStr(data.utmMedium, 0, 120))
+        && (!('utmCampaign' in data) || isStr(data.utmCampaign, 0, 120))
+        && data.deviceType in ['desktop', 'mobile', 'tablet']
+        && data.conversionValue is number
+        && data.conversionValue >= 0
+        && data.conversionValue <= 10000000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidLead(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && isStr(data.name, 1, 140)
+        && isStr(data.email, 3, 254)
+        && (!('phone' in data) || isStr(data.phone, 0, 40))
+        && (!('company' in data) || isStr(data.company, 0, 140))
+        && data.leadSource in ['Organic Search', 'Direct', 'Referral', 'Paid Search', 'Social', 'Email', 'Website Form']
+        && data.status in ['New', 'Contacted', 'Qualified', 'Converted', 'Lost']
+        && data.estimatedValue is number
+        && data.estimatedValue >= 0
+        && data.estimatedValue <= 100000000
+        && (!('notes' in data) || isStr(data.notes, 0, 2000))
+        && data.trackingSource in ['tracked', 'manual']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuote(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && (!('leadId' in data) || isStr(data.leadId, 0, 128))
+        && isStr(data.customerName, 1, 140)
+        && isStr(data.customerEmail, 3, 254)
+        && isStr(data.serviceOrProduct, 1, 240)
+        && data.amount is number
+        && data.amount >= 0
+        && data.amount <= 100000000
+        && isStr(data.currency, 3, 6)
+        && data.status in ['Pending', 'Sent', 'Accepted', 'Rejected']
+        && (!('validUntil' in data) || isStr(data.validUntil, 0, 32))
+        && (!('notes' in data) || isStr(data.notes, 0, 2000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && isStr(data.orderNumber, 1, 64)
+        && isStr(data.customerName, 1, 140)
+        && isStr(data.customerEmail, 3, 254)
+        && isStr(data.productOrService, 1, 240)
+        && data.amount is number
+        && data.amount >= 0
+        && data.amount <= 100000000
+        && isStr(data.currency, 3, 6)
+        && data.channel in ['Organic Search', 'Direct', 'Referral', 'Paid Search', 'Social', 'Manual Entry', 'Shopify', 'WooCommerce']
+        && data.entrySource in ['tracked_conversion', 'manual_entry', 'shopify_sync', 'woocommerce_sync']
+        && data.status in ['Pending', 'Processing', 'Completed', 'Refunded']
+        && isStr(data.orderDate, 8, 32)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIntegrationConfig(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && data.provider in ['google_search_console', 'google_analytics_4', 'google_pagespeed', 'shopify', 'woocommerce']
+        && data.status in ['not_connected', 'configured']
+        && (!('identifier' in data) || isStr(data.identifier, 0, 254))
+        && (!('notes' in data) || isStr(data.notes, 0, 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Match Blocks
+    // -------------------------------------------------------------------------
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isSignedIn()
+        && request.auth.uid == userId
+        && incoming().keys().hasAll(['uid', 'email', 'displayName', 'role', 'plan', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['uid', 'email', 'displayName', 'companyName', 'role', 'plan', 'createdAt', 'updatedAt'])
+        && isValidUserProfile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isSignedIn()
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().role == existing().role
+        && incoming().plan == existing().plan
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'companyName', 'email', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /websites/{websiteId} {
+      allow get: if isValidId(websiteId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(websiteId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'name', 'url', 'domain', 'trackingId', 'seoScore', 'pagesScanned', 'status', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'name', 'url', 'domain', 'industry', 'trackingId', 'seoScore', 'pagesScanned', 'status', 'lastScannedAt', 'createdAt', 'updatedAt'])
+        && isValidWebsite(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(websiteId)
+        && isVerified()
+        && isValidWebsite(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().trackingId == existing().trackingId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['seoScore', 'pagesScanned', 'lastScannedAt', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'url', 'domain', 'industry', 'status', 'updatedAt'])
+        );
+      allow delete: if isValidId(websiteId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /trackingKeys/{trackingId} {
+      allow get: if isValidId(trackingId);
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(trackingId)
+        && isVerified()
+        && incoming().keys().hasAll(['trackingId', 'websiteId', 'ownerId', 'domain', 'createdAt'])
+        && incoming().keys().hasOnly(['trackingId', 'websiteId', 'ownerId', 'domain', 'createdAt'])
+        && incoming().trackingId == trackingId
+        && isValidTrackingKey(incoming())
+        && incoming().createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/websites/$(incoming().websiteId))
+        && getAfter(/databases/$(database)/documents/websites/$(incoming().websiteId)).data.ownerId == request.auth.uid;
+      allow update: if isValidId(trackingId)
+        && isVerified()
+        && isValidTrackingKey(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().websiteId == existing().websiteId
+        && incoming().trackingId == existing().trackingId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['domain']);
+      allow delete: if isValidId(trackingId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /seoAudits/{auditId} {
+      allow get: if isValidId(auditId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(auditId)
+        && isVerified()
+        && incoming().keys().hasAll([
+          'ownerId', 'websiteId', 'url', 'score', 'loadTimeMs', 'httpStatus',
+          'title', 'metaDescription', 'h1Count', 'h2Count', 'h3Count', 'wordCount',
+          'totalImages', 'missingAltCount', 'internalLinks', 'externalLinks',
+          'brokenLinksCount', 'hasViewport', 'hasCanonical', 'hasOpenGraph',
+          'mobileFriendly', 'issues', 'recommendations', 'summary', 'createdAt'
+        ])
+        && incoming().keys().hasOnly([
+          'ownerId', 'websiteId', 'url', 'score', 'loadTimeMs', 'httpStatus',
+          'title', 'metaDescription', 'h1Count', 'h2Count', 'h3Count', 'wordCount',
+          'totalImages', 'missingAltCount', 'internalLinks', 'externalLinks',
+          'brokenLinksCount', 'brokenLinks', 'hasViewport', 'hasCanonical', 'hasOpenGraph',
+          'mobileFriendly', 'issues', 'recommendations', 'summary', 'createdAt'
+        ])
+        && isValidSeoAudit(incoming())
+        && incoming().createdAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if false;
+      allow delete: if isValidId(auditId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /keywordProjects/{keywordId} {
+      allow get: if isValidId(keywordId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(keywordId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'seedKeyword', 'relatedKeywords', 'longTailKeywords', 'clusters', 'contentIdeas', 'suggestedTitles', 'createdAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'seedKeyword', 'targetMarket', 'relatedKeywords', 'longTailKeywords', 'clusters', 'contentIdeas', 'suggestedTitles', 'createdAt'])
+        && isValidKeywordResearch(incoming())
+        && incoming().createdAt == request.time
+        && (!('websiteId' in incoming()) || incoming().websiteId == '' || incoming().websiteId == 'all' || ownsWebsite(incoming().websiteId));
+      allow update: if false;
+      allow delete: if isValidId(keywordId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /generatedContents/{contentId} {
+      allow get: if isValidId(contentId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(contentId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'contentType', 'title', 'body', 'status', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'contentType', 'title', 'targetKeyword', 'body', 'metaTitle', 'metaDescription', 'status', 'createdAt', 'updatedAt'])
+        && isValidGeneratedContent(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (!('websiteId' in incoming()) || incoming().websiteId == '' || incoming().websiteId == 'all' || ownsWebsite(incoming().websiteId));
+      allow update: if isValidId(contentId)
+        && isVerified()
+        && isValidGeneratedContent(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().contentType == existing().contentType
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'targetKeyword', 'body', 'metaTitle', 'metaDescription', 'status', 'updatedAt'])
+        );
+      allow delete: if isValidId(contentId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /visitorEvents/{eventId} {
+      allow get: if isValidId(eventId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(eventId)
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'trackingId', 'visitorId', 'sessionId', 'eventType', 'path', 'trafficSource', 'deviceType', 'conversionValue', 'createdAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'trackingId', 'visitorId', 'sessionId', 'eventType', 'path', 'referrer', 'trafficSource', 'utmSource', 'utmMedium', 'utmCampaign', 'deviceType', 'conversionValue', 'createdAt'])
+        && isValidVisitorEvent(incoming())
+        && incoming().createdAt == request.time
+        && (
+          (isVerified() && incoming().ownerId == request.auth.uid && ownsWebsite(incoming().websiteId)) ||
+          (
+            exists(/databases/$(database)/documents/trackingKeys/$(incoming().trackingId))
+            && get(/databases/$(database)/documents/trackingKeys/$(incoming().trackingId)).data.ownerId == incoming().ownerId
+            && get(/databases/$(database)/documents/trackingKeys/$(incoming().trackingId)).data.websiteId == incoming().websiteId
+          )
+        );
+      allow update: if false;
+      allow delete: if isValidId(eventId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /leads/{leadId} {
+      allow get: if isValidId(leadId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(leadId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'name', 'email', 'leadSource', 'status', 'estimatedValue', 'trackingSource', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'name', 'email', 'phone', 'company', 'leadSource', 'status', 'estimatedValue', 'notes', 'trackingSource', 'createdAt', 'updatedAt'])
+        && isValidLead(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if isValidId(leadId)
+        && isVerified()
+        && isValidLead(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().websiteId == existing().websiteId
+        && incoming().trackingSource == existing().trackingSource
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'company', 'leadSource', 'estimatedValue', 'notes', 'status', 'updatedAt'])
+        );
+      allow delete: if isValidId(leadId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /quotes/{quoteId} {
+      allow get: if isValidId(quoteId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(quoteId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'customerName', 'customerEmail', 'serviceOrProduct', 'amount', 'currency', 'status', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'leadId', 'customerName', 'customerEmail', 'serviceOrProduct', 'amount', 'currency', 'status', 'validUntil', 'notes', 'createdAt', 'updatedAt'])
+        && isValidQuote(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if isValidId(quoteId)
+        && isVerified()
+        && isValidQuote(incoming())
+        && existing().ownerId == request.auth.uid
+        && existing().status != 'Accepted'
+        && existing().status != 'Rejected'
+        && incoming().ownerId == existing().ownerId
+        && incoming().websiteId == existing().websiteId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['leadId', 'customerName', 'customerEmail', 'serviceOrProduct', 'amount', 'currency', 'validUntil', 'notes', 'status', 'updatedAt'])
+        );
+      allow delete: if isValidId(quoteId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(orderId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'orderNumber', 'customerName', 'customerEmail', 'productOrService', 'amount', 'currency', 'channel', 'entrySource', 'status', 'orderDate', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'orderNumber', 'customerName', 'customerEmail', 'productOrService', 'amount', 'currency', 'channel', 'entrySource', 'status', 'orderDate', 'createdAt', 'updatedAt'])
+        && isValidOrder(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if isValidId(orderId)
+        && isVerified()
+        && isValidOrder(incoming())
+        && existing().ownerId == request.auth.uid
+        && existing().status != 'Refunded'
+        && incoming().ownerId == existing().ownerId
+        && incoming().websiteId == existing().websiteId
+        && incoming().entrySource == existing().entrySource
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['orderNumber', 'customerName', 'customerEmail', 'productOrService', 'amount', 'currency', 'channel', 'status', 'orderDate', 'updatedAt'])
+        );
+      allow delete: if isValidId(orderId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /integrations/{integrationId} {
+      allow get: if isValidId(integrationId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(integrationId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'provider', 'status', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'provider', 'status', 'identifier', 'notes', 'createdAt', 'updatedAt'])
+        && isValidIntegrationConfig(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if isValidId(integrationId)
+        && isVerified()
+        && isValidIntegrationConfig(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().websiteId == existing().websiteId
+        && incoming().provider == existing().provider
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'identifier', 'notes', 'updatedAt']);
+      allow delete: if isValidId(integrationId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+  }
+}

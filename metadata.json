@@ -1,0 +1,6 @@
+{
+  "name": "RankPilot AI",
+  "description": "Rank. Convert. Grow. AI-powered SEO analysis, keyword intelligence, visitor tracking, lead & quote pipeline, and sales revenue attribution platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

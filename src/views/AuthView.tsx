@@ -1,0 +1,315 @@
+import React, { useState } from 'react';
+import { ArrowRight, CheckCircle2, Globe, Lock, Mail, Moon, Sparkles, Sun, TrendingUp } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
+import { useToast } from '../context/ToastContext';
+
+export function AuthView() {
+  const { signInWithGoogle, signInWithEmail, signUpWithEmail, sendResetPassword, enterDemoMode } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  const { toast } = useToast();
+
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
+  const [name, setName] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setSubmitting(true);
+    try {
+      if (mode === 'login') {
+        await signInWithEmail(email, password);
+        toast({ title: 'Welcome back to RankPilot AI', variant: 'success' });
+      } else if (mode === 'signup') {
+        await signUpWithEmail(name, companyName, email, password);
+        toast({
+          title: 'Account created',
+          description: 'A verification link has been sent to your email address.',
+          variant: 'success',
+        });
+      } else {
+        await sendResetPassword(email);
+        toast({
+          title: 'Password reset sent',
+          description: 'Check your inbox for reset instructions.',
+          variant: 'success',
+        });
+        setMode('login');
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Authentication failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setErrorMsg(null);
+    setSubmitting(true);
+    try {
+      await signInWithGoogle();
+      toast({ title: 'Signed in with Google', variant: 'success' });
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Google sign-in failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col">
+      <header className="flex items-center justify-between gap-8 border-b border-slate-200 bg-white px-6 py-3.5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <span className="font-display text-base font-bold tracking-tight">RankPilot AI</span>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 whitespace-nowrap"
+          >
+            {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+            <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={enterDemoMode}
+            className="rounded-lg border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700 whitespace-nowrap"
+          >
+            Explore Demo Mode
+          </button>
+        </div>
+      </header>
+
+      <div className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 items-center gap-12 px-6 py-12 lg:grid-cols-12">
+        {/* Left Editorial Column */}
+        <div className="lg:col-span-7 space-y-6">
+          <div className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
+            RankPilot AI · Multi-Website SEO & Revenue Intelligence
+          </div>
+          <h1 className="font-display text-4xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-5xl text-balance">
+            Rank. Convert. Grow.
+          </h1>
+          <p className="max-w-xl text-base leading-relaxed text-slate-600 dark:text-slate-300">
+            Audit live websites for technical SEO, generate AI keyword clusters and conversion copy, install lightweight visitor tracking, and connect organic traffic directly to leads, quotes, and orders.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <Globe className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+              <h2 className="mt-2.5 text-sm font-semibold">Live SEO Audits</h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                Real HTTP crawling, meta & heading checks, broken links, and Gemini action plans.
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <TrendingUp className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+              <h2 className="mt-2.5 text-sm font-semibold">Visitor Tracking</h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                Lightweight script tracking sessions, UTMs, referrers, and conversion goals.
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <CheckCircle2 className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+              <h2 className="mt-2.5 text-sm font-semibold">Pipeline & Sales</h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                Track leads, quotes, orders, and revenue attribution per website and channel.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Auth Card */}
+        <div className="lg:col-span-5">
+          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-800 dark:bg-slate-900">
+            <div className="mb-6">
+              <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
+                {mode === 'login' && 'Sign in to your workspace'}
+                {mode === 'signup' && 'Create your RankPilot account'}
+                {mode === 'forgot' && 'Reset your password'}
+              </h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {mode === 'login' && 'Manage your connected websites, SEO audits, and revenue pipeline.'}
+                {mode === 'signup' && 'Each account gets isolated multi-tenant Cloud Firestore storage.'}
+                {mode === 'forgot' && 'Enter your email address to receive a password reset link.'}
+              </p>
+            </div>
+
+            {mode !== 'forgot' && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleGoogle}
+                  disabled={submitting}
+                  className="flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
+                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z" />
+                    <path fill="#FBBC05" d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z" />
+                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z" />
+                  </svg>
+                  <span>Continue with Google</span>
+                </button>
+
+                <div className="my-5 flex items-center gap-3">
+                  <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+                  <span className="text-[11px] font-medium text-slate-400">or with email</span>
+                  <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+                </div>
+              </>
+            )}
+
+            {errorMsg && (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                {errorMsg}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-3.5">
+              {mode === 'signup' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Full Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Alex Mercer"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Company or Agency (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      placeholder="Northstar Digital"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@company.com"
+                    className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+              </div>
+
+              {mode !== 'forgot' && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                      Password
+                    </label>
+                    {mode === 'login' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setErrorMsg(null);
+                          setMode('forgot');
+                        }}
+                        className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        Forgot password?
+                      </button>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+              >
+                <span>
+                  {submitting
+                    ? 'Please wait...'
+                    : mode === 'login'
+                    ? 'Sign In'
+                    : mode === 'signup'
+                    ? 'Create Account'
+                    : 'Send Reset Link'}
+                </span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </form>
+
+            <div className="mt-5 border-t border-slate-200 pt-4 text-center text-xs text-slate-600 dark:border-slate-800 dark:text-slate-400">
+              {mode === 'login' && (
+                <>
+                  New to RankPilot AI?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMsg(null);
+                      setMode('signup');
+                    }}
+                    className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    Create an account
+                  </button>
+                </>
+              )}
+              {(mode === 'signup' || mode === 'forgot') && (
+                <>
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMsg(null);
+                      setMode('login');
+                    }}
+                    className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    Sign in
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
