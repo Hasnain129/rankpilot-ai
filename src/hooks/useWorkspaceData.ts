@@ -15,24 +15,34 @@ import { useAuth } from '../context/AuthContext';
 import {
   DEMO_AUDITS,
   DEMO_CONTENT,
+  DEMO_GSC_SNAPSHOTS,
   DEMO_INTEGRATIONS,
   DEMO_KEYWORDS,
   DEMO_LEADS,
+  DEMO_OPTIMIZATIONS,
   DEMO_ORDERS,
   DEMO_QUOTES,
+  DEMO_SITE_CRAWLS,
+  DEMO_SYNC_LOGS,
+  DEMO_TECHNICAL_SNAPSHOTS,
+  DEMO_TRACKED_KEYWORDS,
   DEMO_VISITOR_EVENTS,
   DEMO_WEBSITES,
+  DEMO_WP_CONNECTIONS,
+  DEMO_WP_ENTITIES,
 } from '../lib/demoData';
 import { OperationType, db, handleFirestoreError } from '../lib/firebase';
 import {
   ContentType,
   GeneratedContent,
+  GscSnapshot,
   IntegrationConfig,
   IntegrationProvider,
   KeywordProject,
   Lead,
   LeadSource,
   LeadStatus,
+  OptimizationDraftFields,
   Order,
   OrderChannel,
   OrderEntrySource,
@@ -40,8 +50,15 @@ import {
   Quote,
   QuoteStatus,
   SeoAudit,
+  SeoOptimization,
+  SiteCrawl,
+  SyncLog,
+  TechnicalSnapshot,
+  TrackedKeyword,
   VisitorEvent,
   Website,
+  WpConnection,
+  WpEntity,
 } from '../types';
 
 function makeId(prefix: string): string {
@@ -50,7 +67,12 @@ function makeId(prefix: string): string {
 
 function getTimestampMs(val: unknown): number {
   if (!val) return 0;
-  if (typeof val === 'object' && val !== null && 'toMillis' in val && typeof (val as { toMillis: () => number }).toMillis === 'function') {
+  if (
+    typeof val === 'object' &&
+    val !== null &&
+    'toMillis' in val &&
+    typeof (val as { toMillis: () => number }).toMillis === 'function'
+  ) {
     return (val as { toMillis: () => number }).toMillis();
   }
   if (val instanceof Date) return val.getTime();
@@ -67,6 +89,14 @@ export function useWorkspaceData() {
 
   const [websites, setWebsites] = useState<Website[]>([]);
   const [seoAudits, setSeoAudits] = useState<SeoAudit[]>([]);
+  const [siteCrawls, setSiteCrawls] = useState<SiteCrawl[]>([]);
+  const [wpConnections, setWpConnections] = useState<WpConnection[]>([]);
+  const [wpEntities, setWpEntities] = useState<WpEntity[]>([]);
+  const [seoOptimizations, setSeoOptimizations] = useState<SeoOptimization[]>([]);
+  const [gscSnapshots, setGscSnapshots] = useState<GscSnapshot[]>([]);
+  const [trackedKeywords, setTrackedKeywords] = useState<TrackedKeyword[]>([]);
+  const [technicalSnapshots, setTechnicalSnapshots] = useState<TechnicalSnapshot[]>([]);
+  const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [keywordProjects, setKeywordProjects] = useState<KeywordProject[]>([]);
   const [generatedContents, setGeneratedContents] = useState<GeneratedContent[]>([]);
   const [visitorEvents, setVisitorEvents] = useState<VisitorEvent[]>([]);
@@ -81,6 +111,14 @@ export function useWorkspaceData() {
     if (isDemoMode) {
       setWebsites(DEMO_WEBSITES);
       setSeoAudits(DEMO_AUDITS);
+      setSiteCrawls(DEMO_SITE_CRAWLS);
+      setWpConnections(DEMO_WP_CONNECTIONS);
+      setWpEntities(DEMO_WP_ENTITIES);
+      setSeoOptimizations(DEMO_OPTIMIZATIONS);
+      setGscSnapshots(DEMO_GSC_SNAPSHOTS);
+      setTrackedKeywords(DEMO_TRACKED_KEYWORDS);
+      setTechnicalSnapshots(DEMO_TECHNICAL_SNAPSHOTS);
+      setSyncLogs(DEMO_SYNC_LOGS);
       setKeywordProjects(DEMO_KEYWORDS);
       setGeneratedContents(DEMO_CONTENT);
       setVisitorEvents(DEMO_VISITOR_EVENTS);
@@ -97,6 +135,14 @@ export function useWorkspaceData() {
     if (!user) {
       setWebsites([]);
       setSeoAudits([]);
+      setSiteCrawls([]);
+      setWpConnections([]);
+      setWpEntities([]);
+      setSeoOptimizations([]);
+      setGscSnapshots([]);
+      setTrackedKeywords([]);
+      setTechnicalSnapshots([]);
+      setSyncLogs([]);
       setKeywordProjects([]);
       setGeneratedContents([]);
       setVisitorEvents([]);
@@ -113,120 +159,55 @@ export function useWorkspaceData() {
 
     const uid = user.uid;
     let settledCount = 0;
+    const totalListeners = 17;
     const markSettled = () => {
       settledCount++;
-      if (settledCount >= 9) setLoading(false);
+      if (settledCount >= totalListeners) setLoading(false);
     };
 
+    const listen = <T extends { id?: string; createdAt?: unknown }>(
+      colName: string,
+      setter: React.Dispatch<React.SetStateAction<T[]>>,
+      transform?: (raw: Record<string, unknown>, id: string) => T
+    ) =>
+      onSnapshot(
+        query(collection(db, colName), where('ownerId', '==', uid)),
+        (snap) => {
+          const items = snap.docs.map((d) =>
+            transform ? transform(d.data(), d.id) : ({ id: d.id, ...d.data() } as T)
+          );
+          setter(sortDesc(items));
+          markSettled();
+        },
+        (err) => {
+          setError(err.message);
+          markSettled();
+          handleFirestoreError(err, OperationType.LIST, colName);
+        }
+      );
+
     const unsubs = [
-      onSnapshot(
-        query(collection(db, 'websites'), where('ownerId', '==', uid)),
-        (snap) => {
-          setWebsites(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Website))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'websites');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'seoAudits'), where('ownerId', '==', uid)),
-        (snap) => {
-          setSeoAudits(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as SeoAudit))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'seoAudits');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'keywordProjects'), where('ownerId', '==', uid)),
-        (snap) => {
-          setKeywordProjects(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as KeywordProject))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'keywordProjects');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'generatedContents'), where('ownerId', '==', uid)),
-        (snap) => {
-          setGeneratedContents(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as GeneratedContent))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'generatedContents');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'visitorEvents'), where('ownerId', '==', uid)),
-        (snap) => {
-          setVisitorEvents(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as VisitorEvent))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'visitorEvents');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'leads'), where('ownerId', '==', uid)),
-        (snap) => {
-          setLeads(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Lead))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'leads');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'quotes'), where('ownerId', '==', uid)),
-        (snap) => {
-          setQuotes(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Quote))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'quotes');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'orders'), where('ownerId', '==', uid)),
-        (snap) => {
-          setOrders(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Order))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'orders');
-        }
-      ),
-      onSnapshot(
-        query(collection(db, 'integrations'), where('ownerId', '==', uid)),
-        (snap) => {
-          setIntegrations(sortDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as IntegrationConfig))));
-          markSettled();
-        },
-        (err) => {
-          setError(err.message);
-          markSettled();
-          handleFirestoreError(err, OperationType.LIST, 'integrations');
-        }
-      ),
+      listen<Website>('websites', setWebsites),
+      listen<SeoAudit>('seoAudits', setSeoAudits),
+      listen<SiteCrawl>('siteCrawls', setSiteCrawls),
+      listen<WpConnection>('wpConnections', setWpConnections, (raw, id) => {
+        // Never retain encryptedSecrets ciphertext inside React state
+        const { encryptedSecrets: _stripped, ...rest } = raw;
+        return { id, ...rest } as WpConnection;
+      }),
+      listen<WpEntity>('wpEntities', setWpEntities),
+      listen<SeoOptimization>('seoOptimizations', setSeoOptimizations),
+      listen<GscSnapshot>('gscSnapshots', setGscSnapshots),
+      listen<TrackedKeyword>('trackedKeywords', setTrackedKeywords),
+      listen<TechnicalSnapshot>('technicalSnapshots', setTechnicalSnapshots),
+      listen<SyncLog>('syncLogs', setSyncLogs),
+      listen<KeywordProject>('keywordProjects', setKeywordProjects),
+      listen<GeneratedContent>('generatedContents', setGeneratedContents),
+      listen<VisitorEvent>('visitorEvents', setVisitorEvents),
+      listen<Lead>('leads', setLeads),
+      listen<Quote>('quotes', setQuotes),
+      listen<Order>('orders', setOrders),
+      listen<IntegrationConfig>('integrations', setIntegrations),
     ];
 
     return () => {
@@ -298,15 +279,9 @@ export function useWorkspaceData() {
     ) => {
       ensureWriteAllowed();
       const cleanPayload: Record<string, unknown> = {};
-      if (updates.name !== undefined) {
-        cleanPayload.name = updates.name.trim().slice(0, 120) || website.name;
-      }
-      if (updates.industry !== undefined) {
-        cleanPayload.industry = updates.industry.trim().slice(0, 80);
-      }
-      if (updates.status !== undefined) {
-        cleanPayload.status = updates.status;
-      }
+      if (updates.name !== undefined) cleanPayload.name = updates.name.trim().slice(0, 120) || website.name;
+      if (updates.industry !== undefined) cleanPayload.industry = updates.industry.trim().slice(0, 80);
+      if (updates.status !== undefined) cleanPayload.status = updates.status;
       let nextDomain: string | undefined;
       if (updates.url !== undefined) {
         const rawUrl = updates.url.trim().match(/^https?:\/\//i)
@@ -319,22 +294,15 @@ export function useWorkspaceData() {
       }
 
       if (isDemoMode) {
-        setWebsites((prev) =>
-          prev.map((w) => (w.id === website.id ? { ...w, ...cleanPayload } : w))
-        );
+        setWebsites((prev) => prev.map((w) => (w.id === website.id ? { ...w, ...cleanPayload } : w)));
         return;
       }
 
       try {
         const batch = writeBatch(db);
-        batch.update(doc(db, 'websites', website.id), {
-          ...cleanPayload,
-          updatedAt: serverTimestamp(),
-        });
+        batch.update(doc(db, 'websites', website.id), { ...cleanPayload, updatedAt: serverTimestamp() });
         if (nextDomain && nextDomain !== website.domain && website.trackingId) {
-          batch.update(doc(db, 'trackingKeys', website.trackingId), {
-            domain: nextDomain,
-          });
+          batch.update(doc(db, 'trackingKeys', website.trackingId), { domain: nextDomain });
         }
         await batch.commit();
       } catch (err) {
@@ -354,9 +322,7 @@ export function useWorkspaceData() {
       try {
         const batch = writeBatch(db);
         batch.delete(doc(db, 'websites', website.id));
-        if (website.trackingId) {
-          batch.delete(doc(db, 'trackingKeys', website.trackingId));
-        }
+        if (website.trackingId) batch.delete(doc(db, 'trackingKeys', website.trackingId));
         await batch.commit();
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `websites/${website.id}`);
@@ -428,6 +394,167 @@ export function useWorkspaceData() {
       }
     },
     [ensureWriteAllowed, isDemoMode, websites]
+  );
+
+  // SEO Optimization Center CRUD (Phase 3)
+  const createOptimization = useCallback(
+    async (input: {
+      websiteId: string;
+      entityId?: string;
+      remoteId: number;
+      entityType: 'product' | 'category' | 'page' | 'post' | 'url';
+      targetUrl: string;
+      targetKeyword?: string;
+      originalSnapshot: OptimizationDraftFields & { focusKeyword?: string };
+      optimizedDraft: OptimizationDraftFields;
+      internalLinksSuggested: Array<{ anchorText: string; targetUrl: string; reason: string }>;
+      faqSchemaJson?: string;
+      aiNotes?: string;
+    }): Promise<string> => {
+      const uid = ensureWriteAllowed();
+      const id = makeId('opt');
+      const payload = {
+        ownerId: uid,
+        websiteId: input.websiteId,
+        entityId: (input.entityId || '').slice(0, 128),
+        remoteId: Math.trunc(Math.max(0, Number(input.remoteId) || 0)),
+        entityType: input.entityType,
+        targetUrl: input.targetUrl.slice(0, 500),
+        targetKeyword: (input.targetKeyword || '').slice(0, 200),
+        status: 'pending_review' as const,
+        originalSnapshot: input.originalSnapshot,
+        optimizedDraft: input.optimizedDraft,
+        internalLinksSuggested: (input.internalLinksSuggested || []).slice(0, 10),
+        faqSchemaJson: (input.faqSchemaJson || '').slice(0, 12000),
+        aiNotes: (input.aiNotes || '').slice(0, 2000),
+        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+      };
+
+      if (isDemoMode) {
+        setSeoOptimizations((prev) => [{ id, ...payload }, ...prev]);
+        return id;
+      }
+
+      try {
+        await setDoc(doc(db, 'seoOptimizations', id), payload);
+        return id;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `seoOptimizations/${id}`);
+      }
+    },
+    [ensureWriteAllowed, isDemoMode]
+  );
+
+  const updateOptimizationDraft = useCallback(
+    async (
+      id: string,
+      updates: {
+        status?: 'pending_review' | 'approved' | 'rejected';
+        optimizedDraft?: OptimizationDraftFields;
+        targetKeyword?: string;
+        faqSchemaJson?: string;
+        aiNotes?: string;
+      }
+    ) => {
+      ensureWriteAllowed();
+      const clean: Record<string, unknown> = {};
+      if (updates.status !== undefined) clean.status = updates.status;
+      if (updates.optimizedDraft !== undefined) clean.optimizedDraft = updates.optimizedDraft;
+      if (updates.targetKeyword !== undefined) clean.targetKeyword = updates.targetKeyword.slice(0, 200);
+      if (updates.faqSchemaJson !== undefined) clean.faqSchemaJson = updates.faqSchemaJson.slice(0, 12000);
+      if (updates.aiNotes !== undefined) clean.aiNotes = updates.aiNotes.slice(0, 2000);
+
+      if (isDemoMode) {
+        setSeoOptimizations((prev) => prev.map((o) => (o.id === id ? { ...o, ...clean } : o)));
+        return;
+      }
+      try {
+        await updateDoc(doc(db, 'seoOptimizations', id), {
+          ...clean,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `seoOptimizations/${id}`);
+      }
+    },
+    [ensureWriteAllowed, isDemoMode]
+  );
+
+  const deleteOptimization = useCallback(
+    async (id: string) => {
+      ensureWriteAllowed();
+      if (isDemoMode) {
+        setSeoOptimizations((prev) => prev.filter((o) => o.id !== id));
+        return;
+      }
+      try {
+        await deleteDoc(doc(db, 'seoOptimizations', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `seoOptimizations/${id}`);
+      }
+    },
+    [ensureWriteAllowed, isDemoMode]
+  );
+
+  // Tracked Keywords (Phase 6)
+  const addTrackedKeyword = useCallback(
+    async (input: {
+      websiteId: string;
+      keyword: string;
+      targetUrl?: string;
+      country: string;
+      language: string;
+      device: 'desktop' | 'mobile';
+    }): Promise<string> => {
+      const uid = ensureWriteAllowed();
+      const id = makeId('tkw');
+      const payload = {
+        ownerId: uid,
+        websiteId: input.websiteId,
+        keyword: input.keyword.trim().slice(0, 200),
+        targetUrl: (input.targetUrl || '').trim().slice(0, 500),
+        country: (input.country || 'US').trim().slice(0, 16),
+        language: (input.language || 'en').trim().slice(0, 16),
+        device: input.device,
+        currentPosition: 0,
+        previousPosition: 0,
+        bestPosition: 0,
+        sourceType: 'unverified' as const,
+        clicks: 0,
+        impressions: 0,
+        history: [],
+        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+      };
+      if (isDemoMode) {
+        setTrackedKeywords((prev) => [{ id, ...payload }, ...prev]);
+        return id;
+      }
+      try {
+        await setDoc(doc(db, 'trackedKeywords', id), payload);
+        return id;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `trackedKeywords/${id}`);
+      }
+    },
+    [ensureWriteAllowed, isDemoMode]
+  );
+
+  const deleteTrackedKeyword = useCallback(
+    async (id: string) => {
+      ensureWriteAllowed();
+      if (isDemoMode) {
+        setTrackedKeywords((prev) => prev.filter((k) => k.id !== id));
+        return;
+      }
+      try {
+        await deleteDoc(doc(db, 'trackedKeywords', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `trackedKeywords/${id}`);
+      }
+    },
+    [ensureWriteAllowed, isDemoMode]
   );
 
   // Keyword Research
@@ -543,10 +670,7 @@ export function useWorkspaceData() {
         return;
       }
       try {
-        await updateDoc(doc(db, 'generatedContents', id), {
-          ...cleanUpdates,
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, 'generatedContents', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `generatedContents/${id}`);
       }
@@ -655,10 +779,7 @@ export function useWorkspaceData() {
         return;
       }
       try {
-        await updateDoc(doc(db, 'leads', id), {
-          ...cleanUpdates,
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, 'leads', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `leads/${id}`);
       }
@@ -759,10 +880,7 @@ export function useWorkspaceData() {
         return;
       }
       try {
-        await updateDoc(doc(db, 'quotes', id), {
-          ...cleanUpdates,
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, 'quotes', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `quotes/${id}`);
       }
@@ -867,10 +985,7 @@ export function useWorkspaceData() {
         return;
       }
       try {
-        await updateDoc(doc(db, 'orders', id), {
-          ...cleanUpdates,
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, 'orders', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `orders/${id}`);
       }
@@ -970,6 +1085,14 @@ export function useWorkspaceData() {
   return {
     websites,
     seoAudits,
+    siteCrawls,
+    wpConnections,
+    wpEntities,
+    seoOptimizations,
+    gscSnapshots,
+    trackedKeywords,
+    technicalSnapshots,
+    syncLogs,
     keywordProjects,
     generatedContents,
     visitorEvents,
@@ -983,6 +1106,11 @@ export function useWorkspaceData() {
     updateWebsite,
     deleteWebsite,
     saveSeoAudit,
+    createOptimization,
+    updateOptimizationDraft,
+    deleteOptimization,
+    addTrackedKeyword,
+    deleteTrackedKeyword,
     saveKeywordProject,
     deleteKeywordProject,
     saveGeneratedContent,

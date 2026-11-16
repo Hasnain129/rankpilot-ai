@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { ExternalLink, Info, Layers, X } from 'lucide-react';
+import { ArrowRight, ExternalLink, Info, Layers, X } from 'lucide-react';
 import { EmptyState, StatusText } from '../components/ui/DataState';
+import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { IntegrationConfig, IntegrationProvider, Website } from '../types';
+import { IntegrationConfig, IntegrationProvider, NavSection, Website, WpConnection } from '../types';
 
 interface IntegrationsViewProps {
   websites: Website[];
   integrations: IntegrationConfig[];
+  wpConnections: WpConnection[];
   selectedWebsiteId: string;
   onSaveConfig: (input: {
     websiteId: string;
@@ -16,6 +18,7 @@ interface IntegrationsViewProps {
     notes?: string;
   }) => Promise<void>;
   onAddWebsitePrompt: () => void;
+  onNavigate?: (section: NavSection) => void;
 }
 
 const CATALOG: Array<{
@@ -27,86 +30,113 @@ const CATALOG: Array<{
   identifierPlaceholder: string;
   setupSteps: string[];
   docsUrl: string;
+  targetSection?: NavSection;
+  targetLabel?: string;
 }> = [
+  {
+    provider: 'wordpress',
+    name: 'WordPress & WooCommerce REST API',
+    category: 'Live Catalog & SEO Sync',
+    description: 'Import products, categories, posts, and pages, and push user-approved SEO meta titles, descriptions, and copy with rollback.',
+    identifierLabel: 'WordPress Site URL',
+    identifierPlaceholder: 'https://shop.example.com',
+    setupSteps: [
+      'Create a WordPress Application Password under Users → Profile.',
+      'For WooCommerce stores, generate Read/Write REST API keys in WooCommerce → Settings → Advanced.',
+      'Connect credentials inside the encrypted WordPress / Woo Sync module.',
+    ],
+    docsUrl: 'https://developer.wordpress.org/rest-api/',
+    targetSection: 'wordpress-woo',
+    targetLabel: 'Open WP/Woo Sync',
+  },
   {
     provider: 'google_search_console',
     name: 'Google Search Console API',
     category: 'Verified Search Performance',
-    description: 'Sync verified organic impressions, clicks, average CTR, and keyword positions directly from Google.',
+    description: 'Sync verified organic impressions, clicks, average CTR, keyword positions, and URL inspection status directly via Google OAuth.',
     identifierLabel: 'Search Console Property URL',
     identifierPlaceholder: 'sc-domain:example.com or https://example.com/',
     setupSteps: [
-      'Enable the Google Search Console API in Google Cloud Console.',
-      'Configure OAuth 2.0 Web Client with scope https://www.googleapis.com/auth/webmasters.readonly.',
-      'Verify domain ownership in Search Console and enter your property identifier below.',
+      'Authorize Google OAuth in the Search Console module (`webmasters.readonly` scope).',
+      'Select your verified Search Console property.',
+      'Sync queries, pages, date comparisons, and index coverage.',
     ],
     docsUrl: 'https://developers.google.com/webmaster-tools',
+    targetSection: 'search-console',
+    targetLabel: 'Open Search Console',
+  },
+  {
+    provider: 'google_pagespeed',
+    name: 'Google PageSpeed Insights API v5',
+    category: 'Core Web Vitals',
+    description: 'Run live Lighthouse performance, LCP, CLS, INP, TTFB, robots.txt, and sitemap diagnostics.',
+    identifierLabel: 'Target Canonical URL',
+    identifierPlaceholder: 'https://example.com',
+    setupSteps: [
+      'Works immediately via Google PageSpeed Insights v5 API.',
+      'Optionally set GOOGLE_PAGESPEED_API_KEY in server environment variables for higher quota.',
+      'Run audits directly in the Technical Monitor module.',
+    ],
+    docsUrl: 'https://developers.google.com/speed/docs/insights/v5/get-started',
+    targetSection: 'technical-monitor',
+    targetLabel: 'Open Technical Monitor',
+  },
+  {
+    provider: 'woocommerce',
+    name: 'WooCommerce Order & Catalog Sync',
+    category: 'E-Commerce Storefront',
+    description: 'Synchronize WooCommerce products and categories for AI on-page optimization and revenue tracking.',
+    identifierLabel: 'WooCommerce Store URL',
+    identifierPlaceholder: 'https://shop.example.com',
+    setupSteps: [
+      'Navigate to WooCommerce → Settings → Advanced → REST API and generate Read/Write keys.',
+      'Use the WordPress / Woo Sync view to encrypt and store credentials.',
+      'Review AI drafts in Optimization Center before applying changes.',
+    ],
+    docsUrl: 'https://woocommerce.github.io/woocommerce-rest-api-docs/',
+    targetSection: 'wordpress-woo',
+    targetLabel: 'Open WooCommerce Sync',
   },
   {
     provider: 'google_analytics_4',
     name: 'Google Analytics 4 API',
     category: 'Web & Audience Telemetry',
-    description: 'Cross-reference RankPilot visitor tracking with GA4 Data API engagement and ecommerce conversions.',
+    description: 'Map your GA4 Property ID to pair RankPilot visitor tracking with existing property telemetry.',
     identifierLabel: 'GA4 Property ID',
     identifierPlaceholder: 'properties/123456789',
     setupSteps: [
       'Enable Google Analytics Data API v1 in Google Cloud Console.',
-      'Grant Viewer access to your service account or OAuth client on the GA4 property.',
-      'Store your numeric GA4 Property ID below to map this website.',
+      'Grant Viewer access to your OAuth client on the GA4 property.',
+      'Record your numeric GA4 Property ID below to map this website.',
     ],
     docsUrl: 'https://developers.google.com/analytics/devguides/reporting/data/v1',
-  },
-  {
-    provider: 'google_pagespeed',
-    name: 'Google PageSpeed Insights API',
-    category: 'Core Web Vitals',
-    description: 'Run Lighthouse performance, LCP, CLS, and INP diagnostics alongside RankPilot technical crawls.',
-    identifierLabel: 'Target Canonical URL',
-    identifierPlaceholder: 'https://example.com',
-    setupSteps: [
-      'Enable PageSpeed Insights API in Google Cloud Console.',
-      'Optionally set GOOGLE_PAGESPEED_API_KEY in server environment variables for higher quota.',
-      'Save your canonical homepage URL below for Lighthouse checks.',
-    ],
-    docsUrl: 'https://developers.google.com/speed/docs/insights/v5/get-started',
   },
   {
     provider: 'shopify',
     name: 'Shopify',
     category: 'E-Commerce Order Sync',
-    description: 'Automatically ingest Shopify orders/create webhooks into RankPilot Order Management and revenue attribution.',
+    description: 'Record your Shopify store domain alongside RankPilot conversion tracking and manual/imported order workflows.',
     identifierLabel: 'Shopify Store Domain',
     identifierPlaceholder: 'your-store.myshopify.com',
     setupSteps: [
       'Create a Custom App in Shopify Admin with read_orders scope.',
-      'Point Shopify orders/paid webhook to your backend endpoint with HMAC verification.',
-      'Record your .myshopify.com store domain below.',
+      'Point Shopify orders/paid webhook to a custom ingest endpoint if needed.',
+      'Save your .myshopify.com store domain below.',
     ],
     docsUrl: 'https://shopify.dev/docs/apps/webhooks',
-  },
-  {
-    provider: 'woocommerce',
-    name: 'WooCommerce',
-    category: 'E-Commerce Order Sync',
-    description: 'Connect WordPress WooCommerce REST API or Order Created webhooks to track checkout revenue.',
-    identifierLabel: 'WooCommerce Store URL',
-    identifierPlaceholder: 'https://shop.example.com',
-    setupSteps: [
-      'Navigate to WooCommerce → Settings → Advanced → REST API and generate Read keys.',
-      'Configure an Order Created webhook pointing to your RankPilot ingest route.',
-      'Save your WooCommerce store base URL below.',
-    ],
-    docsUrl: 'https://woocommerce.github.io/woocommerce-rest-api-docs/',
   },
 ];
 
 export function IntegrationsView({
   websites,
   integrations,
+  wpConnections,
   selectedWebsiteId,
   onSaveConfig,
   onAddWebsitePrompt,
+  onNavigate,
 }: IntegrationsViewProps) {
+  const { gscAccessToken } = useAuth();
   const { toast } = useToast();
   const activeSite =
     (selectedWebsiteId !== 'all' ? websites.find((w) => w.id === selectedWebsiteId) : websites[0]) || null;
@@ -120,12 +150,14 @@ export function IntegrationsView({
     return (
       <EmptyState
         title="Connect a website to configure integrations"
-        description="Integrations such as Google Search Console, GA4, PageSpeed Insights, Shopify, and WooCommerce are configured per website."
+        description="Integrations such as WordPress/WooCommerce, Google Search Console, PageSpeed Insights, GA4, and Shopify are configured per website."
         actionLabel="Add Website"
         onAction={onAddWebsitePrompt}
       />
     );
   }
+
+  const wpConn = wpConnections.find((c) => c.websiteId === activeSite.id);
 
   const openModal = (item: (typeof CATALOG)[number]) => {
     const existing = integrations.find(
@@ -171,7 +203,7 @@ export function IntegrationsView({
       <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-400" />
         <div>
-          Showing integration configuration for <strong>{activeSite.name}</strong> ({activeSite.domain}). External OAuth tokens and live API sync require configuring credentials in your cloud project; RankPilot never displays simulated live integration metrics.
+          Showing integration hubs for <strong>{activeSite.name}</strong> ({activeSite.domain}). Secret keys are encrypted server-side; Search Console uses live popup OAuth. RankPilot never displays simulated live integration metrics.
         </div>
       </div>
 
@@ -180,6 +212,10 @@ export function IntegrationsView({
           const cfg = integrations.find(
             (i) => i.websiteId === activeSite.id && i.provider === item.provider
           );
+          const isWpLive =
+            (item.provider === 'wordpress' || item.provider === 'woocommerce') &&
+            wpConn?.status === 'connected';
+          const isGscLive = item.provider === 'google_search_console' && Boolean(gscAccessToken);
           const isConfigured = cfg?.status === 'configured';
 
           return (
@@ -196,8 +232,24 @@ export function IntegrationsView({
                     </h3>
                   </div>
                   <StatusText
-                    label={isConfigured ? 'Configured (Pending OAuth)' : 'Not Connected'}
-                    tone={isConfigured ? 'info' : 'neutral'}
+                    label={
+                      isWpLive
+                        ? 'Encrypted & Connected'
+                        : isGscLive
+                        ? 'OAuth Active'
+                        : item.provider === 'google_pagespeed'
+                        ? 'Live Ready'
+                        : isConfigured
+                        ? 'Identifier Saved'
+                        : 'Not Connected'
+                    }
+                    tone={
+                      isWpLive || isGscLive || item.provider === 'google_pagespeed'
+                        ? 'success'
+                        : isConfigured
+                        ? 'info'
+                        : 'neutral'
+                    }
                   />
                 </div>
 
@@ -207,7 +259,7 @@ export function IntegrationsView({
 
                 {isConfigured && cfg?.identifier && (
                   <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 font-mono text-[11px] text-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
-                    Property / Store: {cfg.identifier}
+                    Identifier: {cfg.identifier}
                   </div>
                 )}
 
@@ -221,7 +273,7 @@ export function IntegrationsView({
                 </div>
               </div>
 
-              <div className="mt-5 flex items-center justify-between gap-2 pt-2">
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 pt-2">
                 <a
                   href={item.docsUrl}
                   target="_blank"
@@ -231,14 +283,26 @@ export function IntegrationsView({
                   <span>API Docs</span>
                   <ExternalLink className="h-3 w-3" />
                 </a>
-                <button
-                  type="button"
-                  onClick={() => openModal(item)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  <Layers className="h-3.5 w-3.5" />
-                  <span>{isConfigured ? 'Edit Config' : 'Setup Integration'}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {item.targetSection && onNavigate && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigate(item.targetSection!)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+                    >
+                      <span>{item.targetLabel}</span>
+                      <ArrowRight className="h-3 w-3" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => openModal(item)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <Layers className="h-3.5 w-3.5" />
+                    <span>{isConfigured ? 'Edit Note' : 'Save Property ID'}</span>
+                  </button>
+                </div>
               </div>
             </div>
           );
@@ -255,7 +319,7 @@ export function IntegrationsView({
               </button>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              Save your property or store identifier for <strong>{activeSite.domain}</strong>. Keep secret API keys in server-side environment variables only.
+              Save your property or store identifier for <strong>{activeSite.domain}</strong>. Keep secret API keys in server-side environment variables or the WordPress vault.
             </p>
             <form onSubmit={handleSave} className="space-y-3">
               <div>

@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
+  GoogleAuthProvider,
   User,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  reauthenticateWithPopup,
   sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
@@ -27,6 +29,9 @@ interface AuthContextValue {
   authReady: boolean;
   isDemoMode: boolean;
   firestoreConnected: boolean;
+  gscAccessToken: string | null;
+  connectGoogleSearchConsole: () => Promise<string>;
+  clearGscToken: () => void;
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (name: string, companyName: string, email: string, password: string) => Promise<void>;
@@ -72,6 +77,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [firestoreConnected, setFirestoreConnected] = useState(true);
+  // Stored strictly in memory (never localStorage/sessionStorage)
+  const [gscAccessToken, setGscAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
     testFirestoreConnection().then(setFirestoreConnected);
@@ -101,7 +108,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         } catch (err) {
           console.error('Failed loading user profile:', err);
-          // Fallback in-memory profile so UI remains usable while surfacing Firestore context if needed
           setProfile({
             uid: firebaseUser.uid,
             email: firebaseUser.email || '',
@@ -116,12 +122,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } else {
         setProfile(null);
+        setGscAccessToken(null);
       }
       setAuthReady(true);
     });
 
     return () => unsubscribe();
   }, []);
+
+  const connectGoogleSearchConsole = async (): Promise<string> => {
+    if (!auth.currentUser) {
+      throw new Error('Sign in with RankPilot first before connecting Google Search Console.');
+    }
+    const gscProvider = new GoogleAuthProvider();
+    gscProvider.addScope('https://www.googleapis.com/auth/webmasters.readonly');
+    gscProvider.setCustomParameters({ prompt: 'consent select_account' });
+    try {
+      const hasGoogleLinked = auth.currentUser.providerData.some(
+        (p) => p.providerId === 'google.com'
+      );
+      const result = hasGoogleLinked
+        ? await reauthenticateWithPopup(auth.currentUser, gscProvider)
+        : await signInWithPopup(auth, gscProvider);
+      const cred = GoogleAuthProvider.credentialFromResult(result);
+      const token = cred?.accessToken;
+      if (!token) {
+        throw new Error(
+          'Google OAuth did not return a Search Console access token. Ensure Google Search Console scope consent was granted.'
+        );
+      }
+      setGscAccessToken(token);
+      return token;
+    } catch (err) {
+      throw formatAuthError(err);
+    }
+  };
+
+  const clearGscToken = () => setGscAccessToken(null);
 
   const signInWithGoogle = async () => {
     try {
@@ -222,6 +259,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
+    setGscAccessToken(null);
     if (isDemoMode) {
       setIsDemoMode(false);
       setProfile(null);
@@ -232,6 +270,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const enterDemoMode = () => {
     setIsDemoMode(true);
+    setGscAccessToken(null);
     setProfile({
       uid: 'demo_user',
       email: 'demo@rankpilot.app',
@@ -244,6 +283,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const exitDemoMode = () => {
     setIsDemoMode(false);
+    setGscAccessToken(null);
     setProfile(null);
   };
 
@@ -255,6 +295,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         authReady,
         isDemoMode,
         firestoreConnected,
+        gscAccessToken,
+        connectGoogleSearchConsole,
+        clearGscToken,
         signInWithGoogle,
         signInWithEmail,
         signUpWithEmail,

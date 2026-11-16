@@ -89,6 +89,197 @@
         "mobileFriendly", "issues", "recommendations", "summary", "createdAt"
       ]
     },
+    "SiteCrawl": {
+      "title": "SiteCrawl",
+      "description": "Multi-page site-wide SEO crawl audit including sitemap, robots.txt, duplicates, and page inventory",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "rootUrl": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "pagesCrawled": { "type": "integer" },
+        "overallScore": { "type": "integer" },
+        "robotsTxtFound": { "type": "boolean" },
+        "robotsBlockingAll": { "type": "boolean" },
+        "sitemapFound": { "type": "boolean" },
+        "sitemapUrlsCount": { "type": "integer" },
+        "duplicateTitlesCount": { "type": "integer" },
+        "duplicateMetaCount": { "type": "integer" },
+        "noindexCount": { "type": "integer" },
+        "brokenLinksCount": { "type": "integer" },
+        "pages": { "type": "array" },
+        "siteIssues": { "type": "array" },
+        "summary": { "type": "string", "maxLength": 2500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId", "websiteId", "rootUrl", "pagesCrawled", "overallScore",
+        "robotsTxtFound", "robotsBlockingAll", "sitemapFound", "sitemapUrlsCount",
+        "duplicateTitlesCount", "duplicateMetaCount", "noindexCount", "brokenLinksCount",
+        "pages", "siteIssues", "summary", "createdAt"
+      ]
+    },
+    "WpConnection": {
+      "title": "WpConnection",
+      "description": "Encrypted WordPress and WooCommerce REST API connection metadata per website",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "siteUrl": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "wpUsername": { "type": "string", "maxLength": 120 },
+        "seoPlugin": { "type": "string", "enum": ["rank_math", "yoast", "none"] },
+        "hasWpAppPassword": { "type": "boolean" },
+        "hasWcKeys": { "type": "boolean" },
+        "encryptedSecrets": { "type": "string", "minLength": 10, "maxLength": 4000 },
+        "status": { "type": "string", "enum": ["connected", "error", "disconnected"] },
+        "lastSyncAt": { "type": "string", "maxLength": 64 },
+        "syncMessage": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "siteUrl", "seoPlugin", "hasWpAppPassword", "hasWcKeys", "encryptedSecrets", "status", "createdAt", "updatedAt"]
+    },
+    "WpEntity": {
+      "title": "WpEntity",
+      "description": "Imported WordPress page/post or WooCommerce product/category with SEO metadata",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "remoteId": { "type": "integer" },
+        "entityType": { "type": "string", "enum": ["product", "category", "page", "post"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "slug": { "type": "string", "maxLength": 300 },
+        "url": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "status": { "type": "string", "maxLength": 40 },
+        "description": { "type": "string", "maxLength": 25000 },
+        "shortDescription": { "type": "string", "maxLength": 5000 },
+        "seoTitle": { "type": "string", "maxLength": 300 },
+        "seoDescription": { "type": "string", "maxLength": 600 },
+        "focusKeyword": { "type": "string", "maxLength": 200 },
+        "seoPlugin": { "type": "string", "enum": ["rank_math", "yoast", "none"] },
+        "imagesCount": { "type": "integer" },
+        "missingAltCount": { "type": "integer" },
+        "lastImportedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "remoteId", "entityType", "title", "url", "seoPlugin", "imagesCount", "missingAltCount", "createdAt", "updatedAt"]
+    },
+    "SeoOptimization": {
+      "title": "SeoOptimization",
+      "description": "Approved/pending SEO optimization proposal with original snapshot and rollback capability",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "remoteId": { "type": "integer" },
+        "entityType": { "type": "string", "enum": ["product", "category", "page", "post", "url"] },
+        "targetUrl": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "targetKeyword": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["pending_review", "approved", "rejected", "applied", "rolled_back"] },
+        "originalSnapshot": { "type": "object" },
+        "optimizedDraft": { "type": "object" },
+        "internalLinksSuggested": { "type": "array" },
+        "faqSchemaJson": { "type": "string", "maxLength": 12000 },
+        "aiNotes": { "type": "string", "maxLength": 2000 },
+        "verifiedScore": { "type": "integer" },
+        "appliedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "remoteId", "entityType", "targetUrl", "status", "originalSnapshot", "optimizedDraft", "internalLinksSuggested", "createdAt", "updatedAt"]
+    },
+    "GscSnapshot": {
+      "title": "GscSnapshot",
+      "description": "Verified Google Search Console search analytics snapshot per website",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "propertyUrl": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "dateRangeStart": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "dateRangeEnd": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "totalClicks": { "type": "integer" },
+        "totalImpressions": { "type": "integer" },
+        "avgCtr": { "type": "number" },
+        "avgPosition": { "type": "number" },
+        "prevClicks": { "type": "integer" },
+        "prevImpressions": { "type": "integer" },
+        "dailySeries": { "type": "array" },
+        "topQueries": { "type": "array" },
+        "topPages": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "propertyUrl", "dateRangeStart", "dateRangeEnd", "totalClicks", "totalImpressions", "avgCtr", "avgPosition", "prevClicks", "prevImpressions", "dailySeries", "topQueries", "topPages", "createdAt"]
+    },
+    "TrackedKeyword": {
+      "title": "TrackedKeyword",
+      "description": "Google keyword ranking tracker record with verified historical positions",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "keyword": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "targetUrl": { "type": "string", "maxLength": 500 },
+        "country": { "type": "string", "minLength": 2, "maxLength": 16 },
+        "language": { "type": "string", "minLength": 2, "maxLength": 16 },
+        "device": { "type": "string", "enum": ["desktop", "mobile"] },
+        "currentPosition": { "type": "number" },
+        "previousPosition": { "type": "number" },
+        "bestPosition": { "type": "number" },
+        "sourceType": { "type": "string", "enum": ["gsc_verified", "serp_api", "unverified"] },
+        "clicks": { "type": "integer" },
+        "impressions": { "type": "integer" },
+        "history": { "type": "array" },
+        "lastCheckedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "keyword", "country", "language", "device", "currentPosition", "previousPosition", "bestPosition", "sourceType", "clicks", "impressions", "history", "createdAt", "updatedAt"]
+    },
+    "TechnicalSnapshot": {
+      "title": "TechnicalSnapshot",
+      "description": "Google PageSpeed Insights Core Web Vitals and technical monitoring snapshot",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "url": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "strategy": { "type": "string", "enum": ["mobile", "desktop"] },
+        "performanceScore": { "type": "integer" },
+        "seoScore": { "type": "integer" },
+        "accessibilityScore": { "type": "integer" },
+        "bestPracticesScore": { "type": "integer" },
+        "lcpMs": { "type": "number" },
+        "cls": { "type": "number" },
+        "inpMs": { "type": "number" },
+        "fcpMs": { "type": "number" },
+        "ttfbMs": { "type": "number" },
+        "robotsStatus": { "type": "string", "maxLength": 120 },
+        "sitemapStatus": { "type": "string", "maxLength": 120 },
+        "opportunities": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "url", "strategy", "performanceScore", "seoScore", "accessibilityScore", "bestPracticesScore", "lcpMs", "cls", "inpMs", "fcpMs", "ttfbMs", "opportunities", "createdAt"]
+    },
+    "SyncLog": {
+      "title": "SyncLog",
+      "description": "Audit log of WordPress, WooCommerce, GSC, crawler, and rank-tracking sync operations",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "channel": { "type": "string", "enum": ["wordpress", "woocommerce", "gsc", "rank_tracker", "crawler", "pagespeed"] },
+        "action": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "status": { "type": "string", "enum": ["success", "error", "warning"] },
+        "detail": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "channel", "action", "status", "detail", "createdAt"]
+    },
     "KeywordResearch": {
       "title": "KeywordResearch",
       "description": "AI-generated keyword research and topic cluster project",
@@ -220,7 +411,7 @@
       "properties": {
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "provider": { "type": "string", "enum": ["google_search_console", "google_analytics_4", "google_pagespeed", "shopify", "woocommerce"] },
+        "provider": { "type": "string", "enum": ["google_search_console", "google_analytics_4", "google_pagespeed", "shopify", "woocommerce", "wordpress"] },
         "status": { "type": "string", "enum": ["not_connected", "configured"] },
         "identifier": { "type": "string", "maxLength": 254 },
         "notes": { "type": "string", "maxLength": 500 },
@@ -245,7 +436,39 @@
     },
     "/seoAudits/{auditId}": {
       "schema": { "$ref": "#/entities/SeoAudit" },
-      "description": "Technical SEO audits scoped by ownerId and websiteId"
+      "description": "Single-URL technical SEO audits scoped by ownerId and websiteId"
+    },
+    "/siteCrawls/{crawlId}": {
+      "schema": { "$ref": "#/entities/SiteCrawl" },
+      "description": "Multi-page site-wide SEO crawl reports scoped by ownerId and websiteId"
+    },
+    "/wpConnections/{connectionId}": {
+      "schema": { "$ref": "#/entities/WpConnection" },
+      "description": "AES-256-GCM encrypted WordPress & WooCommerce connection records"
+    },
+    "/wpEntities/{entityId}": {
+      "schema": { "$ref": "#/entities/WpEntity" },
+      "description": "Imported WooCommerce products/categories and WordPress pages/posts"
+    },
+    "/seoOptimizations/{optId}": {
+      "schema": { "$ref": "#/entities/SeoOptimization" },
+      "description": "AI SEO optimization drafts, approvals, live applications, and rollback snapshots"
+    },
+    "/gscSnapshots/{snapshotId}": {
+      "schema": { "$ref": "#/entities/GscSnapshot" },
+      "description": "Verified Google Search Console search analytics snapshots"
+    },
+    "/trackedKeywords/{kwId}": {
+      "schema": { "$ref": "#/entities/TrackedKeyword" },
+      "description": "Rank tracker keywords and historical ranking series"
+    },
+    "/technicalSnapshots/{techId}": {
+      "schema": { "$ref": "#/entities/TechnicalSnapshot" },
+      "description": "Google PageSpeed Insights Core Web Vitals and technical monitoring snapshots"
+    },
+    "/syncLogs/{logId}": {
+      "schema": { "$ref": "#/entities/SyncLog" },
+      "description": "Audit trail logs for WordPress, WooCommerce, GSC, and SEO sync operations"
     },
     "/keywordProjects/{keywordId}": {
       "schema": { "$ref": "#/entities/KeywordResearch" },

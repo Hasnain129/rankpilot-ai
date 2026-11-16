@@ -4,20 +4,25 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
-import { Lead, NavSection, OrderChannel, Quote, Website } from './types';
+import { CrawledPageSummary, Lead, NavSection, OrderChannel, Quote, Website, WpEntity } from './types';
 import { AuthView } from './views/AuthView';
 import { ContentStudioView } from './views/ContentStudioView';
 import { DashboardView } from './views/DashboardView';
 import { IntegrationsView } from './views/IntegrationsView';
 import { KeywordResearchView } from './views/KeywordResearchView';
 import { LeadsView } from './views/LeadsView';
+import { OptimizationCenterView, OptimizationPrefill } from './views/OptimizationCenterView';
 import { OrdersView } from './views/OrdersView';
 import { ProfileSettingsView } from './views/ProfileSettingsView';
 import { QuotesView } from './views/QuotesView';
+import { RankTrackerView } from './views/RankTrackerView';
 import { SalesAnalyticsView } from './views/SalesAnalyticsView';
+import { SearchConsoleView } from './views/SearchConsoleView';
 import { SeoAnalyzerView } from './views/SeoAnalyzerView';
+import { TechnicalMonitorView } from './views/TechnicalMonitorView';
 import { VisitorTrackingView } from './views/VisitorTrackingView';
 import { WebsitesView } from './views/WebsitesView';
+import { WordPressView } from './views/WordPressView';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -82,6 +87,8 @@ function WorkspaceApp() {
   const [contentPrefillKeyword, setContentPrefillKeyword] = useState<string | undefined>(undefined);
   const [contentPrefillTitle, setContentPrefillTitle] = useState<string | undefined>(undefined);
   const [quotePrefillLead, setQuotePrefillLead] = useState<Lead | null>(null);
+  const [optimizePrefill, setOptimizePrefill] = useState<OptimizationPrefill | null>(null);
+  const [technicalPrefillUrl, setTechnicalPrefillUrl] = useState<string | undefined>(undefined);
 
   // Reset scope if currently selected website was deleted
   useEffect(() => {
@@ -120,6 +127,58 @@ function WorkspaceApp() {
     setSelectedWebsiteId(site.id);
     setScanTargetUrl(site.url);
     setActiveSection('seo-analyzer');
+  };
+
+  const handleSendPageToOptimizer = (page: CrawledPageSummary, websiteId: string) => {
+    setSelectedWebsiteId(websiteId);
+    setOptimizePrefill({
+      websiteId,
+      entityType: 'url',
+      targetUrl: page.url,
+      title: page.title || page.h1,
+    });
+    setActiveSection('optimization-center');
+  };
+
+  const handleOptimizeWpEntity = (entity: WpEntity) => {
+    setSelectedWebsiteId(entity.websiteId);
+    setOptimizePrefill({
+      websiteId: entity.websiteId,
+      entityId: entity.id,
+      remoteId: entity.remoteId,
+      entityType: entity.entityType,
+      targetUrl: entity.url,
+      title: entity.title,
+      targetKeyword: entity.focusKeyword,
+    });
+    setActiveSection('optimization-center');
+  };
+
+  const handleOptimizeUrlFromGsc = (url: string, websiteId: string, query?: string) => {
+    setSelectedWebsiteId(websiteId);
+    setOptimizePrefill({
+      websiteId,
+      entityType: 'url',
+      targetUrl: url,
+      targetKeyword: query,
+    });
+    setActiveSection('optimization-center');
+  };
+
+  const handleTrackKeywordFromGsc = async (keyword: string, url: string, websiteId: string) => {
+    await data.addTrackedKeyword({
+      websiteId,
+      keyword,
+      targetUrl: url,
+      country: 'US',
+      language: 'en',
+      device: 'desktop',
+    });
+    toast({
+      title: `Added "${keyword}" to Rank Tracker`,
+      variant: 'success',
+    });
+    setActiveSection('rank-tracker');
   };
 
   const handleSendToContentStudio = (keyword: string, title?: string) => {
@@ -188,6 +247,11 @@ function WorkspaceApp() {
         <DashboardView
           websites={data.websites}
           seoAudits={data.seoAudits}
+          siteCrawls={data.siteCrawls}
+          seoOptimizations={data.seoOptimizations}
+          gscSnapshots={data.gscSnapshots}
+          trackedKeywords={data.trackedKeywords}
+          technicalSnapshots={data.technicalSnapshots}
           visitorEvents={data.visitorEvents}
           leads={data.leads}
           quotes={data.quotes}
@@ -222,10 +286,12 @@ function WorkspaceApp() {
         <SeoAnalyzerView
           websites={data.websites}
           seoAudits={data.seoAudits}
+          siteCrawls={data.siteCrawls}
           selectedWebsiteId={selectedWebsiteId}
           initialTargetUrl={scanTargetUrl}
           onSaveAudit={data.saveSeoAudit}
           onAddWebsitePrompt={handleQuickAddWebsite}
+          onSendPageToOptimizer={handleSendPageToOptimizer}
         />
       )}
 
@@ -233,10 +299,77 @@ function WorkspaceApp() {
         <KeywordResearchView
           websites={data.websites}
           keywordProjects={data.keywordProjects}
+          siteCrawls={data.siteCrawls}
+          wpEntities={data.wpEntities}
           selectedWebsiteId={selectedWebsiteId}
           onSaveProject={data.saveKeywordProject}
           onDeleteProject={data.deleteKeywordProject}
           onSendToContentStudio={handleSendToContentStudio}
+          onAddTrackedKeyword={data.addTrackedKeyword}
+        />
+      )}
+
+      {activeSection === 'optimization-center' && (
+        <OptimizationCenterView
+          websites={data.websites}
+          wpConnections={data.wpConnections}
+          wpEntities={data.wpEntities}
+          siteCrawls={data.siteCrawls}
+          optimizations={data.seoOptimizations}
+          selectedWebsiteId={selectedWebsiteId}
+          prefill={optimizePrefill}
+          onClearPrefill={() => setOptimizePrefill(null)}
+          onCreateOptimization={data.createOptimization}
+          onUpdateOptimization={data.updateOptimizationDraft}
+          onDeleteOptimization={data.deleteOptimization}
+          onSaveAudit={data.saveSeoAudit}
+          onAddWebsitePrompt={handleQuickAddWebsite}
+          onNavigateToWordPress={() => setActiveSection('wordpress-woo')}
+        />
+      )}
+
+      {activeSection === 'wordpress-woo' && (
+        <WordPressView
+          websites={data.websites}
+          wpConnections={data.wpConnections}
+          wpEntities={data.wpEntities}
+          syncLogs={data.syncLogs}
+          selectedWebsiteId={selectedWebsiteId}
+          onAddWebsitePrompt={handleQuickAddWebsite}
+          onOptimizeEntity={handleOptimizeWpEntity}
+        />
+      )}
+
+      {activeSection === 'search-console' && (
+        <SearchConsoleView
+          websites={data.websites}
+          gscSnapshots={data.gscSnapshots}
+          selectedWebsiteId={selectedWebsiteId}
+          onAddWebsitePrompt={handleQuickAddWebsite}
+          onOptimizeUrl={handleOptimizeUrlFromGsc}
+          onTrackKeyword={handleTrackKeywordFromGsc}
+        />
+      )}
+
+      {activeSection === 'rank-tracker' && (
+        <RankTrackerView
+          websites={data.websites}
+          trackedKeywords={data.trackedKeywords}
+          gscSnapshots={data.gscSnapshots}
+          selectedWebsiteId={selectedWebsiteId}
+          onAddTrackedKeyword={data.addTrackedKeyword}
+          onDeleteTrackedKeyword={data.deleteTrackedKeyword}
+          onAddWebsitePrompt={handleQuickAddWebsite}
+        />
+      )}
+
+      {activeSection === 'technical-monitor' && (
+        <TechnicalMonitorView
+          websites={data.websites}
+          technicalSnapshots={data.technicalSnapshots}
+          selectedWebsiteId={selectedWebsiteId}
+          initialUrl={technicalPrefillUrl}
+          onAddWebsitePrompt={handleQuickAddWebsite}
         />
       )}
 
@@ -322,9 +455,14 @@ function WorkspaceApp() {
         <IntegrationsView
           websites={data.websites}
           integrations={data.integrations}
+          wpConnections={data.wpConnections}
           selectedWebsiteId={selectedWebsiteId}
           onSaveConfig={data.saveIntegrationConfig}
           onAddWebsitePrompt={handleQuickAddWebsite}
+          onNavigate={(sec) => {
+            if (sec === 'technical-monitor') setTechnicalPrefillUrl(undefined);
+            setActiveSection(sec);
+          }}
         />
       )}
 

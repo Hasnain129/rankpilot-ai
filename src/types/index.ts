@@ -38,13 +38,19 @@ export type IntegrationProvider =
   | 'google_analytics_4'
   | 'google_pagespeed'
   | 'shopify'
-  | 'woocommerce';
+  | 'woocommerce'
+  | 'wordpress';
 
 export type NavSection =
   | 'dashboard'
   | 'websites'
   | 'seo-analyzer'
   | 'keyword-research'
+  | 'optimization-center'
+  | 'wordpress-woo'
+  | 'search-console'
+  | 'rank-tracker'
+  | 'technical-monitor'
   | 'content-studio'
   | 'visitor-tracking'
   | 'leads'
@@ -125,6 +131,54 @@ export interface SeoAudit {
   createdAt?: unknown;
 }
 
+export type CrawledPageType = 'product' | 'category' | 'blog' | 'landing' | 'other';
+
+export interface CrawledPageSummary {
+  url: string;
+  pageType: CrawledPageType;
+  httpStatus: number;
+  loadTimeMs: number;
+  title: string;
+  metaDescription: string;
+  h1: string;
+  h1Count: number;
+  canonicalUrl: string;
+  noindex: boolean;
+  wordCount: number;
+  missingAltCount: number;
+  brokenLinksCount: number;
+  schemaTypes: string[];
+  score: number;
+  issuesCount: number;
+}
+
+export interface SiteCrawl {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  rootUrl: string;
+  pagesCrawled: number;
+  overallScore: number;
+  robotsTxtFound: boolean;
+  robotsBlockingAll: boolean;
+  sitemapFound: boolean;
+  sitemapUrlsCount: number;
+  duplicateTitlesCount: number;
+  duplicateMetaCount: number;
+  noindexCount: number;
+  brokenLinksCount: number;
+  pages: CrawledPageSummary[];
+  siteIssues: Array<{
+    severity: 'critical' | 'warning' | 'passed';
+    category: string;
+    title: string;
+    detail: string;
+    affectedCount: number;
+  }>;
+  summary: string;
+  createdAt?: unknown;
+}
+
 export interface RelatedKeyword {
   keyword: string;
   intent: string;
@@ -162,6 +216,186 @@ export interface KeywordProject {
   clusters: KeywordCluster[];
   contentIdeas: ContentIdea[];
   suggestedTitles: string[];
+  createdAt?: unknown;
+}
+
+export interface KeywordMappingResult {
+  mappings: Array<{
+    url: string;
+    pageType: string;
+    primaryKeyword: string;
+    longTailKeywords: string[];
+    searchIntent: string;
+    competitionEstimate: string;
+    opportunityNote: string;
+  }>;
+  cannibalizationAlerts: Array<{
+    competingTopic: string;
+    urls: string[];
+    severity: string;
+    resolutionAdvice: string;
+  }>;
+  dataNotice: string;
+}
+
+export interface WpConnection {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  siteUrl: string;
+  wpUsername?: string;
+  seoPlugin: 'rank_math' | 'yoast' | 'none';
+  hasWpAppPassword: boolean;
+  hasWcKeys: boolean;
+  status: 'connected' | 'error' | 'disconnected';
+  lastSyncAt?: string;
+  syncMessage?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface WpEntity {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  remoteId: number;
+  entityType: 'product' | 'category' | 'page' | 'post';
+  title: string;
+  slug?: string;
+  url: string;
+  status?: string;
+  description?: string;
+  shortDescription?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  focusKeyword?: string;
+  seoPlugin: 'rank_math' | 'yoast' | 'none';
+  imagesCount: number;
+  missingAltCount: number;
+  lastImportedAt?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface OptimizationDraftFields {
+  title?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  shortDescription?: string;
+  description?: string;
+  headingSuggestions?: string[];
+  imageAltSuggestions?: string[];
+}
+
+export interface SeoOptimization {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  entityId?: string;
+  remoteId: number;
+  entityType: 'product' | 'category' | 'page' | 'post' | 'url';
+  targetUrl: string;
+  targetKeyword?: string;
+  status: 'pending_review' | 'approved' | 'rejected' | 'applied' | 'rolled_back';
+  originalSnapshot: OptimizationDraftFields & { focusKeyword?: string };
+  optimizedDraft: OptimizationDraftFields;
+  internalLinksSuggested: Array<{ anchorText: string; targetUrl: string; reason: string }>;
+  faqSchemaJson?: string;
+  aiNotes?: string;
+  verifiedScore?: number;
+  appliedAt?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface GscSnapshot {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  propertyUrl: string;
+  dateRangeStart: string;
+  dateRangeEnd: string;
+  totalClicks: number;
+  totalImpressions: number;
+  avgCtr: number;
+  avgPosition: number;
+  prevClicks: number;
+  prevImpressions: number;
+  dailySeries: Array<{
+    date: string;
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+  }>;
+  topQueries: Array<{
+    query: string;
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+  }>;
+  topPages: Array<{
+    page: string;
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+    positionDelta?: number;
+  }>;
+  createdAt?: unknown;
+}
+
+export interface TrackedKeyword {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  keyword: string;
+  targetUrl?: string;
+  country: string;
+  language: string;
+  device: 'desktop' | 'mobile';
+  currentPosition: number;
+  previousPosition: number;
+  bestPosition: number;
+  sourceType: 'gsc_verified' | 'serp_api' | 'unverified';
+  clicks: number;
+  impressions: number;
+  history: Array<{ date: string; position: number; source: string }>;
+  lastCheckedAt?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface TechnicalSnapshot {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  url: string;
+  strategy: 'mobile' | 'desktop';
+  performanceScore: number;
+  seoScore: number;
+  accessibilityScore: number;
+  bestPracticesScore: number;
+  lcpMs: number;
+  cls: number;
+  inpMs: number;
+  fcpMs: number;
+  ttfbMs: number;
+  robotsStatus?: string;
+  sitemapStatus?: string;
+  opportunities: Array<{ title: string; savings: string; description: string }>;
+  createdAt?: unknown;
+}
+
+export interface SyncLog {
+  id: string;
+  ownerId: string;
+  websiteId: string;
+  channel: 'wordpress' | 'woocommerce' | 'gsc' | 'rank_tracker' | 'crawler' | 'pagespeed';
+  action: string;
+  status: 'success' | 'error' | 'warning';
+  detail: string;
   createdAt?: unknown;
 }
 

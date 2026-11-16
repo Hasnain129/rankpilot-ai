@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Copy, FileText, Loader2, Save, Sparkles, Trash2 } from 'lucide-react';
 import { EmptyState, StatusText } from '../components/ui/DataState';
 import { useToast } from '../context/ToastContext';
+import { apiFetch } from '../lib/apiClient';
 import { ContentType, GeneratedContent, Website } from '../types';
 
 interface ContentStudioViewProps {
@@ -82,9 +83,13 @@ export function ContentStudioView({
     if (!topic.trim()) return;
     setGenerating(true);
     try {
-      const res = await fetch('/api/ai/content', {
+      const data = await apiFetch<{
+        title: string;
+        metaTitle?: string;
+        metaDescription?: string;
+        body: string;
+      }>('/api/ai/content', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contentType,
           topic: topic.trim(),
@@ -94,8 +99,6 @@ export function ContentStudioView({
           websiteName: activeWebsite?.name || '',
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Content generation failed.');
       setEditingId(null);
       setDraftTitle(data.title);
       setDraftMetaTitle(data.metaTitle || '');
