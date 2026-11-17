@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getFirebaseConfig } from './firebaseAuth';
+import { getFirebaseConfig } from './firebaseAuth.ts';
 
 function getVaultKey(): Buffer {
   const explicit = process.env.CREDENTIALS_ENCRYPTION_KEY?.trim();

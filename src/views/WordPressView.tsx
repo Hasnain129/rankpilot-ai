@@ -193,10 +193,10 @@ export function WordPressView({
       toast({
         title: `Imported ${data.importedCount} item(s)`,
         description:
-          data.warnings?.length > 0
-            ? `${data.warnings[0]}`
+          (data.warnings?.length ?? 0) > 0
+            ? `${data.warnings?.[0] ?? ''}`
             : `Detected SEO plugin: ${data.seoPlugin}`,
-        variant: data.warnings?.length ? 'info' : 'success',
+        variant: (data.warnings?.length ?? 0) > 0 ? 'info' : 'success',
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Catalog import failed.';

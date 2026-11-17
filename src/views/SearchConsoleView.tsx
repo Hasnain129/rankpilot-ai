@@ -106,8 +106,10 @@ export function SearchConsoleView({
             setSelectedProperty(domainMatch?.siteUrl || data.siteEntry[0].siteUrl);
           }
         }
-      } catch {
-        // non-fatal
+      } catch (err) {
+        if (err instanceof Error && err.message.toLowerCase().includes('401')) {
+          clearGscToken();
+        }
       }
     })();
     return () => {
@@ -186,6 +188,9 @@ export function SearchConsoleView({
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'GSC sync error.';
+      if (msg.toLowerCase().includes('401') || msg.toLowerCase().includes('invalid credentials')) {
+        clearGscToken();
+      }
       setError(msg);
       toast({ title: 'Sync failed', description: msg, variant: 'error' });
     } finally {

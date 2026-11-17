@@ -38,6 +38,7 @@ import {
   GscSnapshot,
   IntegrationConfig,
   IntegrationProvider,
+  KeywordAssignment,
   KeywordProject,
   Lead,
   LeadSource,
@@ -559,7 +560,7 @@ export function useWorkspaceData() {
 
   // Keyword Research
   const saveKeywordProject = useCallback(
-    async (project: Omit<KeywordProject, 'id' | 'ownerId' | 'createdAt'>) => {
+    async (project: Omit<KeywordProject, 'id' | 'ownerId' | 'createdAt'>): Promise<string | void> => {
       const uid = ensureWriteAllowed();
       const id = makeId('kw');
       const payload = {
@@ -567,24 +568,63 @@ export function useWorkspaceData() {
         websiteId: (project.websiteId || 'all').slice(0, 128),
         seedKeyword: project.seedKeyword.slice(0, 160),
         targetMarket: (project.targetMarket || 'Global').slice(0, 80),
+        country: (project.country || 'US').slice(0, 16),
+        language: (project.language || 'en').slice(0, 16),
+        sourceType: project.sourceType || ('keyword' as const),
+        targetUrl: (project.targetUrl || '').slice(0, 500),
         relatedKeywords: (project.relatedKeywords || []).slice(0, 25),
         longTailKeywords: (project.longTailKeywords || []).slice(0, 25),
+        keywordItems: (project.keywordItems || []).slice(0, 80),
+        synonyms: (project.synonyms || []).slice(0, 30),
+        opportunities: (project.opportunities || []).slice(0, 25),
+        assignments: (project.assignments || []).slice(0, 80),
+        dataNotice: (project.dataNotice || '').slice(0, 600),
         clusters: (project.clusters || []).slice(0, 15),
         contentIdeas: (project.contentIdeas || []).slice(0, 15),
         suggestedTitles: (project.suggestedTitles || []).slice(0, 15),
         createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
       };
       if (isDemoMode) {
         setKeywordProjects((prev) => [{ id, ...payload }, ...prev]);
-        return;
+        return id;
       }
       try {
         await setDoc(doc(db, 'keywordProjects', id), payload);
+        return id;
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `keywordProjects/${id}`);
       }
     },
     [ensureWriteAllowed, isDemoMode]
+  );
+
+  const assignKeywordToPage = useCallback(
+    async (projectId: string, assignment: KeywordAssignment) => {
+      ensureWriteAllowed();
+      const targetProj = keywordProjects.find((p) => p.id === projectId);
+      const currentList = targetProj?.assignments || [];
+      const nextAssignments = [
+        ...currentList.filter((a) => a.keyword.toLowerCase() !== assignment.keyword.toLowerCase()),
+        assignment,
+      ].slice(0, 80);
+
+      if (isDemoMode) {
+        setKeywordProjects((prev) =>
+          prev.map((p) => (p.id === projectId ? { ...p, assignments: nextAssignments } : p))
+        );
+        return;
+      }
+      try {
+        await updateDoc(doc(db, 'keywordProjects', projectId), {
+          assignments: nextAssignments,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `keywordProjects/${projectId}`);
+      }
+    },
+    [ensureWriteAllowed, isDemoMode, keywordProjects]
   );
 
   const deleteKeywordProject = useCallback(
@@ -1112,6 +1152,7 @@ export function useWorkspaceData() {
     addTrackedKeyword,
     deleteTrackedKeyword,
     saveKeywordProject,
+    assignKeywordToPage,
     deleteKeywordProject,
     saveGeneratedContent,
     updateGeneratedContent,

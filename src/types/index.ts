@@ -179,6 +179,8 @@ export interface SiteCrawl {
   createdAt?: unknown;
 }
 
+export type KeywordCategory = 'related' | 'long_tail' | 'question' | 'commercial' | 'synonym';
+
 export interface RelatedKeyword {
   keyword: string;
   intent: string;
@@ -192,9 +194,47 @@ export interface LongTailKeyword {
   funnelStage: string;
 }
 
+export interface KeywordMetricItem {
+  keyword: string;
+  category: KeywordCategory;
+  intent: string;
+  country: string;
+  language: string;
+  searchVolume: number | null;
+  keywordDifficulty: number | null;
+  cpc: number | null;
+  competition: string | null;
+  competitionEstimate: string;
+  opportunityScore: number | null;
+  opportunityTier: string;
+  funnelStage?: string;
+  rationale: string;
+  dataSource: 'google_ads' | 'dataforseo' | 'ai_estimate';
+}
+
+export interface KeywordOpportunityItem {
+  keyword: string;
+  bucket: 'low_competition_candidate' | 'commercial_buying' | 'ecommerce_priority' | 'informational_blog';
+  intent: string;
+  whyItWins: string;
+  recommendedAssetType: string;
+  isVerifiedMetric: boolean;
+}
+
+export interface KeywordAssignment {
+  keyword: string;
+  targetUrl: string;
+  pageTitle: string;
+  entityType: string;
+  assignedAt: string;
+}
+
 export interface KeywordCluster {
   clusterName: string;
   pillarTopic: string;
+  recommendedPrimaryKeyword?: string;
+  suggestedAssetType?: string;
+  cannibalizationRisk?: string;
   keywords: string[];
 }
 
@@ -211,12 +251,22 @@ export interface KeywordProject {
   websiteId?: string;
   seedKeyword: string;
   targetMarket?: string;
+  country?: string;
+  language?: string;
+  sourceType?: 'keyword' | 'product' | 'url' | 'category';
+  targetUrl?: string;
   relatedKeywords: RelatedKeyword[];
   longTailKeywords: LongTailKeyword[];
+  keywordItems?: KeywordMetricItem[];
+  synonyms?: string[];
+  opportunities?: KeywordOpportunityItem[];
+  assignments?: KeywordAssignment[];
+  dataNotice?: string;
   clusters: KeywordCluster[];
   contentIdeas: ContentIdea[];
   suggestedTitles: string[];
   createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface KeywordMappingResult {
@@ -236,6 +286,42 @@ export interface KeywordMappingResult {
     resolutionAdvice: string;
   }>;
   dataNotice: string;
+}
+
+export interface CompetitorKeywordAnalysisResult {
+  crawledPages: Array<{
+    url: string;
+    title: string;
+    metaDescription: string;
+    h1: string;
+    wordCount: number;
+    error?: string;
+  }>;
+  discoveredKeywords: Array<{
+    keyword: string;
+    intent: string;
+    foundOnUrl: string;
+    opportunityType: string;
+    recommendedTargetAsset: string;
+    rationale: string;
+  }>;
+  contentGaps: Array<{
+    topic: string;
+    competitorAngle: string;
+    suggestedTitle: string;
+    targetKeyword: string;
+  }>;
+  dataNotice: string;
+}
+
+export interface KeywordProviderStatus {
+  id: 'gemini_ai' | 'google_search_console' | 'google_ads' | 'dataforseo' | 'serp_api';
+  name: string;
+  connected: boolean;
+  capability: string;
+  pricingTier: string;
+  missingEnvVars: string[];
+  note: string;
 }
 
 export interface WpConnection {

@@ -8,22 +8,28 @@ import {
   fsWriteSyncLog,
   getFirebaseConfig,
   requireFirebaseAuth,
-} from './firebaseAuth';
-import { decryptSecrets, encryptSecrets, hasDedicatedEncryptionKey } from './cryptoVault';
+} from './firebaseAuth.ts';
+import { decryptSecrets, encryptSecrets, hasDedicatedEncryptionKey } from './cryptoVault.ts';
 import {
   crawlEntireSite,
   inspectPageRaw,
   inspectRobotsAndSitemap,
   validatePublicHttpUrl,
-} from './crawler';
+} from './crawler.ts';
 import {
-  DetectedSeoPlugin,
-  WpEntityType,
-  WpSecrets,
+  type DetectedSeoPlugin,
+  type WpEntityType,
+  type WpSecrets,
   importWordPressCatalog,
   pushChangeToWordPress,
   verifyWordPressConnection,
-} from './wordpress';
+} from './wordpress.ts';
+import {
+  COUNTRY_TARGETS,
+  LANGUAGE_TARGETS,
+  fetchVerifiedKeywordMetrics,
+  getKeywordProvidersStatus,
+} from './keywordProviders.ts';
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -124,16 +130,40 @@ export function createApp() {
   // 0. Health Endpoint (public, zero secrets)
   // ---------------------------------------------------------------------------
   app.get('/api/health', (_req, res) => {
+    let firebaseMeta: { projectId: string; firestoreDatabaseId: string } | null = null;
+    try {
+      const cfg = getFirebaseConfig();
+      firebaseMeta = {
+        projectId: cfg.projectId,
+        firestoreDatabaseId: cfg.firestoreDatabaseId,
+      };
+    } catch {
+      firebaseMeta = null;
+    }
     res.json({
       ok: true,
       service: 'RankPilot AI',
       timestamp: new Date().toISOString(),
+      firebase: firebaseMeta,
       capabilities: {
         geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
         dedicatedVaultKey: hasDedicatedEncryptionKey(),
         pageSpeedKeyConfigured: Boolean(process.env.GOOGLE_PAGESPEED_API_KEY),
         serpApiConfigured: Boolean(process.env.SERP_API_KEY),
       },
+      keywordProviders: getKeywordProvidersStatus().map((p) => ({
+        id: p.id,
+        name: p.name,
+        connected: p.connected,
+      })),
+    });
+  });
+
+  app.get('/api/keywords/providers', requireFirebaseAuth, (_req, res) => {
+    res.json({
+      providers: getKeywordProvidersStatus(),
+      countries: Object.values(COUNTRY_TARGETS).map((c) => ({ code: c.code, label: c.label })),
+      languages: Object.values(LANGUAGE_TARGETS).map((l) => ({ code: l.code, label: l.label })),
     });
   });
 
@@ -398,18 +428,70 @@ Provide a concise executive summary (max 2 sentences) and 4-6 specific actionabl
   });
 
   // ---------------------------------------------------------------------------
-  // 3. Gemini AI Seed Keyword Research (Protected)
+  // 3. Advanced Keyword Research + Modular Verified Metrics Enrichment (Protected)
   // ---------------------------------------------------------------------------
   app.post('/api/ai/keywords', requireFirebaseAuth, aiLimiter, async (req, res) => {
     try {
-      const { seedKeyword, targetMarket = 'Global / English', websiteUrl = '' } = req.body as {
+      const {
+        seedKeyword,
+        sourceType = 'keyword',
+        targetUrl = '',
+        country = 'US',
+        language = 'en',
+        intentFilter = 'All',
+        targetMarket = '',
+        websiteUrl = '',
+      } = req.body as {
         seedKeyword?: string;
+        sourceType?: 'keyword' | 'product' | 'url' | 'category';
+        targetUrl?: string;
+        country?: string;
+        language?: string;
+        intentFilter?: string;
         targetMarket?: string;
         websiteUrl?: string;
       };
 
-      if (!seedKeyword || typeof seedKeyword !== 'string' || seedKeyword.trim().length < 2 || seedKeyword.trim().length > 160) {
-        res.status(400).json({ error: 'Please provide a seed keyword between 2 and 160 characters.' });
+      const cleanCountry = COUNTRY_TARGETS[String(country).toUpperCase()]
+        ? String(country).toUpperCase()
+        : 'US';
+      const cleanLanguage = LANGUAGE_TARGETS[String(language).toLowerCase()]
+        ? String(language).toLowerCase()
+        : 'en';
+      const countryInfo = COUNTRY_TARGETS[cleanCountry];
+      const langInfo = LANGUAGE_TARGETS[cleanLanguage];
+      const resolvedMarket =
+        targetMarket?.trim() || `${countryInfo.label} / ${langInfo.label}`;
+
+      let cleanSeed = typeof seedKeyword === 'string' ? seedKeyword.trim() : '';
+      let crawledUrlContext = '';
+      const inspectTarget =
+        (targetUrl && targetUrl.trim()) ||
+        (sourceType === 'url' && /^https?:\/\//i.test(cleanSeed) ? cleanSeed : '');
+
+      if (inspectTarget) {
+        try {
+          const inspected = await inspectPageRaw(inspectTarget, 0);
+          const p = inspected.page;
+          crawledUrlContext = `\nLive Crawled Page Context (${p.url}):
+- Title: "${p.title}"
+- H1: "${p.h1}"
+- Meta Description: "${p.metaDescription}"
+- Excerpt: "${p.bodyExcerpt.slice(0, 900)}"`;
+          if (!cleanSeed || /^https?:\/\//i.test(cleanSeed)) {
+            cleanSeed = (p.title || p.h1 || new URL(p.url).hostname).slice(0, 150);
+          }
+        } catch (crawlErr) {
+          const msg = crawlErr instanceof Error ? crawlErr.message : 'Unable to crawl target URL';
+          if (sourceType === 'url') {
+            res.status(400).json({ error: `Could not inspect target URL: ${msg}` });
+            return;
+          }
+        }
+      }
+
+      if (!cleanSeed || cleanSeed.length < 2 || cleanSeed.length > 160) {
+        res.status(400).json({ error: 'Please provide a seed keyword, product name, or public URL (2–160 chars).' });
         return;
       }
 
@@ -417,13 +499,23 @@ Provide a concise executive summary (max 2 sentences) and 4-6 specific actionabl
       const response = await callGeminiWithRetry(() =>
         ai.models.generateContent({
           model: 'gemini-4-hydrogen',
-          contents: `Generate an AI keyword strategy for seed keyword: "${seedKeyword.trim()}".
-Target market: ${String(targetMarket).slice(0, 80)}.
-${websiteUrl ? `Target website context: ${String(websiteUrl).slice(0, 300)}.` : ''}
+          contents: `Perform comprehensive SEO keyword discovery for:
+Seed / Topic (${sourceType}): "${cleanSeed}"
+Target Country: ${countryInfo.label} (${cleanCountry})
+Language: ${langInfo.label} (${cleanLanguage})
+Requested Intent Focus: ${String(intentFilter || 'All').slice(0, 40)}
+${websiteUrl ? `Website Context: ${String(websiteUrl).slice(0, 300)}` : ''}
+${crawledUrlContext}
 
-Important: Do NOT invent fake exact monthly search volumes or exact keyword difficulty numbers. Instead classify search intent, estimated competition tier (Low/Medium/High — labeled as AI Estimate), topic clusters, and high-converting content ideas.`,
+Requirements:
+1. Generate 6-8 core related keywords, 6-8 specific long-tail keywords, 5 question keywords (how/what/best/why/which), 5 commercial/buying-intent keywords (buy/price/review/near me/best), and 5 variations/synonyms tailored to ${countryInfo.label} (${langInfo.label}).
+2. Classify each term's Search Intent accurately (Commercial, Transactional, Informational, Navigational), funnel stage (TOFU/MOFU/BOFU), AI Competition Estimate (Low (AI Est.) / Medium (AI Est.) / High (AI Est.)), and Opportunity Tier (AI High Opportunity / AI Medium Opportunity / AI Niche Opportunity).
+3. Group into 3-5 topical Keyword Clusters with recommendedPrimaryKeyword, suggestedAssetType (product | category | blog | landing), and cannibalizationRisk (Low | Medium | High).
+4. Provide 4-6 strategic keyword opportunities categorized strictly as bucket: "low_competition_candidate" | "commercial_buying" | "ecommerce_priority" | "informational_blog".
+5. CRITICAL: NEVER invent fake monthly search volumes, fake CPC values, or fake numeric difficulty scores.`,
           config: {
-            systemInstruction: 'You are an expert SEO strategist. Return structured keyword intelligence without fabricating search volume numbers.',
+            systemInstruction:
+              'You are a principal international SEO strategist specializing in ecommerce, SaaS, and regional search intent. Return structured keyword intelligence and never fabricate numeric volumes or rankings.',
             responseMimeType: 'application/json',
             responseSchema: {
               type: Type.OBJECT,
@@ -436,9 +528,10 @@ Important: Do NOT invent fake exact monthly search volumes or exact keyword diff
                       keyword: { type: Type.STRING },
                       intent: { type: Type.STRING },
                       competitionEstimate: { type: Type.STRING },
+                      opportunityTier: { type: Type.STRING },
                       rationale: { type: Type.STRING },
                     },
-                    required: ['keyword', 'intent', 'competitionEstimate', 'rationale'],
+                    required: ['keyword', 'intent', 'competitionEstimate', 'opportunityTier', 'rationale'],
                   },
                 },
                 longTailKeywords: {
@@ -449,10 +542,38 @@ Important: Do NOT invent fake exact monthly search volumes or exact keyword diff
                       keyword: { type: Type.STRING },
                       intent: { type: Type.STRING },
                       funnelStage: { type: Type.STRING },
+                      competitionEstimate: { type: Type.STRING },
+                      opportunityTier: { type: Type.STRING },
                     },
-                    required: ['keyword', 'intent', 'funnelStage'],
+                    required: ['keyword', 'intent', 'funnelStage', 'competitionEstimate', 'opportunityTier'],
                   },
                 },
+                questionKeywords: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      keyword: { type: Type.STRING },
+                      intent: { type: Type.STRING },
+                      rationale: { type: Type.STRING },
+                    },
+                    required: ['keyword', 'intent', 'rationale'],
+                  },
+                },
+                commercialKeywords: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      keyword: { type: Type.STRING },
+                      intent: { type: Type.STRING },
+                      competitionEstimate: { type: Type.STRING },
+                      rationale: { type: Type.STRING },
+                    },
+                    required: ['keyword', 'intent', 'competitionEstimate', 'rationale'],
+                  },
+                },
+                synonyms: { type: Type.ARRAY, items: { type: Type.STRING } },
                 clusters: {
                   type: Type.ARRAY,
                   items: {
@@ -460,9 +581,33 @@ Important: Do NOT invent fake exact monthly search volumes or exact keyword diff
                     properties: {
                       clusterName: { type: Type.STRING },
                       pillarTopic: { type: Type.STRING },
+                      recommendedPrimaryKeyword: { type: Type.STRING },
+                      suggestedAssetType: { type: Type.STRING },
+                      cannibalizationRisk: { type: Type.STRING },
                       keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
                     },
-                    required: ['clusterName', 'pillarTopic', 'keywords'],
+                    required: [
+                      'clusterName',
+                      'pillarTopic',
+                      'recommendedPrimaryKeyword',
+                      'suggestedAssetType',
+                      'cannibalizationRisk',
+                      'keywords',
+                    ],
+                  },
+                },
+                opportunities: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      keyword: { type: Type.STRING },
+                      bucket: { type: Type.STRING },
+                      intent: { type: Type.STRING },
+                      whyItWins: { type: Type.STRING },
+                      recommendedAssetType: { type: Type.STRING },
+                    },
+                    required: ['keyword', 'bucket', 'intent', 'whyItWins', 'recommendedAssetType'],
                   },
                 },
                 contentIdeas: {
@@ -480,20 +625,207 @@ Important: Do NOT invent fake exact monthly search volumes or exact keyword diff
                 },
                 suggestedTitles: { type: Type.ARRAY, items: { type: Type.STRING } },
               },
-              required: ['relatedKeywords', 'longTailKeywords', 'clusters', 'contentIdeas', 'suggestedTitles'],
+              required: [
+                'relatedKeywords',
+                'longTailKeywords',
+                'questionKeywords',
+                'commercialKeywords',
+                'synonyms',
+                'clusters',
+                'opportunities',
+                'contentIdeas',
+                'suggestedTitles',
+              ],
             },
           },
         })
       );
 
       const parsed = JSON.parse(response.text || '{}');
+
+      // Normalize into unified keywordItems list (deduplicated)
+      const itemMap = new Map<
+        string,
+        {
+          keyword: string;
+          category: 'related' | 'long_tail' | 'question' | 'commercial' | 'synonym';
+          intent: string;
+          competitionEstimate: string;
+          opportunityTier: string;
+          funnelStage?: string;
+          rationale: string;
+        }
+      >();
+
+      const pushCandidate = (
+        kw: string,
+        category: 'related' | 'long_tail' | 'question' | 'commercial' | 'synonym',
+        intent: string,
+        competitionEstimate: string,
+        opportunityTier: string,
+        rationale: string,
+        funnelStage?: string
+      ) => {
+        const cleanKw = String(kw || '').trim();
+        if (!cleanKw) return;
+        const norm = cleanKw.toLowerCase();
+        if (!itemMap.has(norm)) {
+          itemMap.set(norm, {
+            keyword: cleanKw.slice(0, 180),
+            category,
+            intent: String(intent || 'Commercial').slice(0, 40),
+            competitionEstimate: String(competitionEstimate || 'Medium (AI Est.)').slice(0, 40),
+            opportunityTier: String(opportunityTier || 'AI Medium Opportunity').slice(0, 40),
+            funnelStage: funnelStage ? String(funnelStage).slice(0, 20) : undefined,
+            rationale: String(rationale || '').slice(0, 260),
+          });
+        }
+      };
+
+      (parsed.relatedKeywords || []).forEach(
+        (r: { keyword: string; intent: string; competitionEstimate: string; opportunityTier?: string; rationale: string }) =>
+          pushCandidate(
+            r.keyword,
+            'related',
+            r.intent,
+            r.competitionEstimate,
+            r.opportunityTier || 'AI Medium Opportunity',
+            r.rationale,
+            'MOFU'
+          )
+      );
+      (parsed.longTailKeywords || []).forEach(
+        (lt: { keyword: string; intent: string; funnelStage: string; competitionEstimate?: string; opportunityTier?: string }) =>
+          pushCandidate(
+            lt.keyword,
+            'long_tail',
+            lt.intent,
+            lt.competitionEstimate || 'Low (AI Est.)',
+            lt.opportunityTier || 'AI High Opportunity',
+            `Long-tail ${lt.funnelStage || 'MOFU'} search query`,
+            lt.funnelStage
+          )
+      );
+      (parsed.questionKeywords || []).forEach(
+        (q: { keyword: string; intent: string; rationale: string }) =>
+          pushCandidate(
+            q.keyword,
+            'question',
+            q.intent || 'Informational',
+            'Low (AI Est.)',
+            'AI High Opportunity',
+            q.rationale || 'High-clarity buyer question query',
+            'TOFU'
+          )
+      );
+      (parsed.commercialKeywords || []).forEach(
+        (c: { keyword: string; intent: string; competitionEstimate?: string; rationale: string }) =>
+          pushCandidate(
+            c.keyword,
+            'commercial',
+            c.intent || 'Transactional',
+            c.competitionEstimate || 'Medium (AI Est.)',
+            'AI High Opportunity',
+            c.rationale || 'Commercial buying-intent query',
+            'BOFU'
+          )
+      );
+      (parsed.synonyms || []).forEach((s: string) =>
+        pushCandidate(
+          s,
+          'synonym',
+          'Commercial',
+          'Medium (AI Est.)',
+          'AI Medium Opportunity',
+          'Semantic keyword variation & synonym',
+          'MOFU'
+        )
+      );
+
+      const candidateList = Array.from(itemMap.values()).slice(0, 50);
+      const verifiedLookup = await fetchVerifiedKeywordMetrics(
+        candidateList.map((c) => c.keyword),
+        cleanCountry,
+        cleanLanguage
+      );
+
+      const keywordItems = candidateList.map((item) => {
+        const verified = verifiedLookup.metrics[item.keyword.toLowerCase()];
+        const searchVolume = verified ? verified.searchVolume : null;
+        const cpc = verified ? verified.cpc : null;
+        const competition = verified ? verified.competition : null;
+        const keywordDifficulty = verified ? verified.keywordDifficulty : null;
+
+        // Compute Opportunity Score ONLY from verified numerical volume & competition index
+        let opportunityScore: number | null = null;
+        if (verified && typeof verified.searchVolume === 'number' && verified.searchVolume > 0) {
+          const compPenalty =
+            typeof verified.competitionIndex === 'number'
+              ? verified.competitionIndex * 0.55
+              : competition === 'High'
+              ? 60
+              : competition === 'Medium'
+              ? 35
+              : 15;
+          const volScore = Math.min(100, Math.round(Math.log10(verified.searchVolume + 1) * 20));
+          opportunityScore = Math.max(5, Math.min(99, Math.round(volScore * 0.65 + (100 - compPenalty) * 0.35)));
+        }
+
+        return {
+          keyword: item.keyword,
+          category: item.category,
+          intent: item.intent,
+          country: cleanCountry,
+          language: cleanLanguage,
+          searchVolume,
+          keywordDifficulty,
+          cpc,
+          competition,
+          competitionEstimate: item.competitionEstimate,
+          opportunityScore,
+          opportunityTier: verified && opportunityScore !== null ? 'Verified' : item.opportunityTier,
+          funnelStage: item.funnelStage || 'MOFU',
+          rationale: item.rationale,
+          dataSource: verified ? verified.dataSource : ('ai_estimate' as const),
+        };
+      });
+
+      const allowedBuckets = new Set([
+        'low_competition_candidate',
+        'commercial_buying',
+        'ecommerce_priority',
+        'informational_blog',
+      ]);
+      const cleanOpportunities = (Array.isArray(parsed.opportunities) ? parsed.opportunities : [])
+        .slice(0, 15)
+        .map((o: { keyword?: string; bucket?: string; intent?: string; whyItWins?: string; recommendedAssetType?: string }) => ({
+          keyword: String(o.keyword || '').slice(0, 160),
+          bucket: (allowedBuckets.has(String(o.bucket)) ? o.bucket : 'commercial_buying') as
+            | 'low_competition_candidate'
+            | 'commercial_buying'
+            | 'ecommerce_priority'
+            | 'informational_blog',
+          intent: String(o.intent || 'Commercial').slice(0, 40),
+          whyItWins: String(o.whyItWins || '').slice(0, 320),
+          recommendedAssetType: String(o.recommendedAssetType || 'landing').slice(0, 40),
+          isVerifiedMetric: verifiedLookup.provider !== 'none',
+        }));
+
       res.json({
-        seedKeyword: seedKeyword.trim(),
-        targetMarket: String(targetMarket).slice(0, 80),
+        seedKeyword: cleanSeed,
+        targetMarket: resolvedMarket.slice(0, 80),
+        country: cleanCountry,
+        language: cleanLanguage,
+        sourceType,
+        targetUrl: inspectTarget.slice(0, 500),
         relatedKeywords: (parsed.relatedKeywords || []).slice(0, 20),
         longTailKeywords: (parsed.longTailKeywords || []).slice(0, 20),
-        clusters: (parsed.clusters || []).slice(0, 10),
-        contentIdeas: (parsed.contentIdeas || []).slice(0, 10),
+        keywordItems,
+        synonyms: (Array.isArray(parsed.synonyms) ? parsed.synonyms : []).slice(0, 20),
+        opportunities: cleanOpportunities,
+        dataNotice: verifiedLookup.notice,
+        clusters: (parsed.clusters || []).slice(0, 12),
+        contentIdeas: (parsed.contentIdeas || []).slice(0, 12),
         suggestedTitles: (parsed.suggestedTitles || []).slice(0, 12),
       });
     } catch (err) {
@@ -503,42 +835,51 @@ Important: Do NOT invent fake exact monthly search volumes or exact keyword diff
   });
 
   // ---------------------------------------------------------------------------
-  // 4. Phase 2: Page/Product Keyword Mapping + Cannibalization Analysis
+  // 4. Phase 2: Page/Product/WooCommerce Keyword Mapping + Cannibalization Analysis
   // ---------------------------------------------------------------------------
   app.post('/api/ai/keyword-map', requireFirebaseAuth, aiLimiter, async (req, res) => {
     try {
       const { websiteDomain, targetMarket = 'United States / English', pages } = req.body as {
         websiteDomain?: string;
         targetMarket?: string;
-        pages?: Array<{ url: string; title: string; pageType: string; existingKeyword?: string }>;
+        pages?: Array<{
+          url: string;
+          title: string;
+          pageType: string;
+          existingKeyword?: string;
+          shortDescription?: string;
+        }>;
       };
 
       if (!Array.isArray(pages) || pages.length === 0) {
-        res.status(400).json({ error: 'Provide at least 1 crawled page or WordPress entity to map keywords.' });
+        res.status(400).json({ error: 'Provide at least 1 crawled page or WordPress/WooCommerce entity to map keywords.' });
         return;
       }
 
-      const slice = pages.slice(0, 20);
+      const slice = pages.slice(0, 25);
       const ai = getGeminiClient();
       const response = await callGeminiWithRetry(() =>
         ai.models.generateContent({
           model: 'gemini-4-hydrogen',
-          contents: `Analyze this inventory of pages/products on ${String(websiteDomain || 'the website').slice(0, 200)} (Market: ${targetMarket}).
-For each page:
-1. Recommend 1 primary target keyword and 2-3 long-tail supporting keywords.
+          contents: `Analyze this inventory of pages, WooCommerce products, and categories on ${String(websiteDomain || 'the website').slice(0, 200)} (Market: ${targetMarket}).
+For each item:
+1. Recommend 1 unique primary target keyword and 2-3 secondary/long-tail supporting keywords tailored to its product name, description, and category.
 2. Classify search intent (Transactional, Commercial, Informational, Navigational).
 3. Estimate AI competition tier (Low / Medium / High — AI estimate only, DO NOT invent monthly search volume or exact rank numbers).
-4. Detect potential keyword cannibalization where multiple URLs compete for the same primary topic/intent, and advise how to differentiate canonical targets.
+4. Detect duplicate keyword targeting and keyword cannibalization where multiple URLs compete for the same primary topic/intent, and advise how to differentiate canonical targets or reassign keywords.
 
-Pages:
+Pages / Catalog Items:
 ${slice
   .map(
     (p, i) =>
-      `${i + 1}. [${p.pageType}] URL: ${p.url} | Title: "${p.title}" | Current Focus Keyword: "${p.existingKeyword || 'none'}"`
+      `${i + 1}. [${p.pageType}] URL: ${p.url} | Title: "${p.title}" | Focus Keyword: "${p.existingKeyword || 'none'}"${
+        p.shortDescription ? ` | Summary: "${String(p.shortDescription).replace(/<[^>]+>/g, ' ').slice(0, 160)}"` : ''
+      }`
   )
   .join('\n')}`,
           config: {
-            systemInstruction: 'You are an enterprise e-commerce & SaaS SEO architect. Map distinct keywords per URL and detect cannibalization without inventing search volume or ranking figures.',
+            systemInstruction:
+              'You are an enterprise e-commerce & WooCommerce SEO architect. Assign non-overlapping primary keywords per product/category/page and detect cannibalization without inventing search volume or ranking figures.',
             responseMimeType: 'application/json',
             responseSchema: {
               type: Type.OBJECT,
@@ -593,7 +934,164 @@ ${slice
         cannibalizationAlerts: Array.isArray(parsed.cannibalizationAlerts)
           ? parsed.cannibalizationAlerts
           : [],
-        dataNotice: 'Intent & competition tiers are AI-estimated. Connect Google Search Console for verified impressions and rankings.',
+        dataNotice:
+          'Intent & competition tiers are AI-estimated. Connect Google Search Console or a verified volume provider for live metrics.',
+      });
+    } catch (err) {
+      const { status, message } = extractGeminiError(err);
+      res.status(status).json({ error: message });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // 4b. Competitor URL Keyword Extraction & Content Gap Analysis (Protected, SSRF-Safe)
+  // ---------------------------------------------------------------------------
+  app.post('/api/ai/keyword-competitor', requireFirebaseAuth, aiLimiter, async (req, res) => {
+    try {
+      const { urls, country = 'US', language = 'en', ownDomain = '' } = req.body as {
+        urls?: string[];
+        country?: string;
+        language?: string;
+        ownDomain?: string;
+      };
+
+      if (!Array.isArray(urls) || urls.length === 0) {
+        res.status(400).json({ error: 'Provide 1 to 3 public competitor URLs to inspect.' });
+        return;
+      }
+
+      const targetUrls = urls
+        .map((u) => String(u || '').trim())
+        .filter((u) => u.length > 0)
+        .slice(0, 3);
+
+      const crawledPages: Array<{
+        url: string;
+        title: string;
+        metaDescription: string;
+        h1: string;
+        wordCount: number;
+        excerpt: string;
+        error?: string;
+      }> = [];
+
+      for (const rawUrl of targetUrls) {
+        try {
+          const inspected = await inspectPageRaw(rawUrl, 0);
+          const p = inspected.page;
+          crawledPages.push({
+            url: p.url,
+            title: p.title,
+            metaDescription: p.metaDescription,
+            h1: p.h1,
+            wordCount: p.wordCount,
+            excerpt: p.bodyExcerpt.slice(0, 1200),
+          });
+        } catch (err) {
+          crawledPages.push({
+            url: rawUrl,
+            title: '',
+            metaDescription: '',
+            h1: '',
+            wordCount: 0,
+            excerpt: '',
+            error: err instanceof Error ? err.message : 'Unable to crawl competitor URL.',
+          });
+        }
+      }
+
+      const reachable = crawledPages.filter((c) => !c.error);
+      if (reachable.length === 0) {
+        res.status(400).json({
+          error:
+            crawledPages[0]?.error ||
+            'Could not reach any supplied competitor URLs. Ensure they are public http/https pages.',
+        });
+        return;
+      }
+
+      const countryLabel = COUNTRY_TARGETS[country.toUpperCase()]?.label || country;
+      const langLabel = LANGUAGE_TARGETS[language.toLowerCase()]?.label || language;
+
+      const ai = getGeminiClient();
+      const response = await callGeminiWithRetry(() =>
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: `Analyze these publicly crawled competitor pages (Market: ${countryLabel} / ${langLabel}${
+            ownDomain ? `, Comparing for website: ${ownDomain}` : ''
+          }):
+
+${reachable
+  .map(
+    (c, i) => `Competitor ${i + 1}: ${c.url}
+- Title: "${c.title}"
+- H1: "${c.h1}"
+- Meta Description: "${c.metaDescription}"
+- Word Count: ${c.wordCount}
+- Copy Excerpt: "${c.excerpt}"`
+  )
+  .join('\n\n')}
+
+Extract:
+1. 10-15 concrete target keywords and buyer phrases clearly evidenced in these competitor titles, headings, and copy (categorize opportunityType as "Product/Service" | "Category" | "Comparison" | "Informational Guide" and recommendedTargetAsset as "product" | "category" | "blog" | "landing").
+2. 4-6 content gap angles we can build stronger pages around.
+CRITICAL: NEVER claim or guess the competitor's Google ranking positions, organic traffic, or monthly search volume.`,
+          config: {
+            systemInstruction:
+              'You are a competitive SEO researcher. Extract keyword themes strictly from actual crawled page text; never fabricate competitor traffic or Google rank positions.',
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                discoveredKeywords: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      keyword: { type: Type.STRING },
+                      intent: { type: Type.STRING },
+                      foundOnUrl: { type: Type.STRING },
+                      opportunityType: { type: Type.STRING },
+                      recommendedTargetAsset: { type: Type.STRING },
+                      rationale: { type: Type.STRING },
+                    },
+                    required: [
+                      'keyword',
+                      'intent',
+                      'foundOnUrl',
+                      'opportunityType',
+                      'recommendedTargetAsset',
+                      'rationale',
+                    ],
+                  },
+                },
+                contentGaps: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      topic: { type: Type.STRING },
+                      competitorAngle: { type: Type.STRING },
+                      suggestedTitle: { type: Type.STRING },
+                      targetKeyword: { type: Type.STRING },
+                    },
+                    required: ['topic', 'competitorAngle', 'suggestedTitle', 'targetKeyword'],
+                  },
+                },
+              },
+              required: ['discoveredKeywords', 'contentGaps'],
+            },
+          },
+        })
+      );
+
+      const parsed = JSON.parse(response.text || '{}');
+      res.json({
+        crawledPages: crawledPages.map(({ excerpt: _ex, ...rest }) => rest),
+        discoveredKeywords: (Array.isArray(parsed.discoveredKeywords) ? parsed.discoveredKeywords : []).slice(0, 20),
+        contentGaps: (Array.isArray(parsed.contentGaps) ? parsed.contentGaps : []).slice(0, 10),
+        dataNotice:
+          'Competitor headings and on-page text were crawled live. Actual Google ranking positions, search volumes, and organic traffic are unavailable without a connected SEO/SERP data provider.',
       });
     } catch (err) {
       const { status, message } = extractGeminiError(err);
@@ -1625,6 +2123,9 @@ Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under
           sourceType = 'gsc_verified';
           if (gscHit.page && !matchedUrl) matchedUrl = gscHit.page;
         } else if (serpApiKey) {
+          const glCode =
+            COUNTRY_TARGETS[kwDoc.country.toUpperCase()]?.gl ||
+            kwDoc.country.toLowerCase().slice(0, 2);
           if (serpProvider === 'serper') {
             const sRes = await fetch('https://google.serper.dev/search', {
               method: 'POST',
@@ -1634,7 +2135,7 @@ Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under
               },
               body: JSON.stringify({
                 q: kwDoc.keyword,
-                gl: kwDoc.country.toLowerCase().slice(0, 2),
+                gl: glCode,
                 hl: kwDoc.language.toLowerCase().slice(0, 2),
                 num: 50,
               }),
@@ -1653,7 +2154,7 @@ Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under
           } else if (serpProvider === 'serpapi') {
             const url = new URL('https://serpapi.com/search.json');
             url.searchParams.set('q', kwDoc.keyword);
-            url.searchParams.set('gl', kwDoc.country.toLowerCase().slice(0, 2));
+            url.searchParams.set('gl', glCode);
             url.searchParams.set('hl', kwDoc.language.toLowerCase().slice(0, 2));
             url.searchParams.set('device', kwDoc.device);
             url.searchParams.set('num', '50');

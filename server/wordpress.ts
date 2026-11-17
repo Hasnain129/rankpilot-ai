@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { safePublicFetch, validatePublicHttpUrl } from './crawler';
+import { safePublicFetch, validatePublicHttpUrl } from './crawler.ts';
 
 export type DetectedSeoPlugin = 'rank_math' | 'yoast' | 'none';
 export type WpEntityType = 'product' | 'category' | 'page' | 'post';

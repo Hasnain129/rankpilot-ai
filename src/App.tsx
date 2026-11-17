@@ -303,6 +303,7 @@ function WorkspaceApp() {
           wpEntities={data.wpEntities}
           selectedWebsiteId={selectedWebsiteId}
           onSaveProject={data.saveKeywordProject}
+          onAssignKeywordToPage={data.assignKeywordToPage}
           onDeleteProject={data.deleteKeywordProject}
           onSendToContentStudio={handleSendToContentStudio}
           onAddTrackedKeyword={data.addTrackedKeyword}

@@ -102,9 +102,15 @@ export function isPrivateIp(ip: string): boolean {
 }
 
 export async function validatePublicHttpUrl(inputUrl: string): Promise<URL> {
-  const normalized = inputUrl.trim().match(/^https?:\/\//i)
-    ? inputUrl.trim()
-    : `https://${inputUrl.trim()}`;
+  const trimmed = inputUrl.trim();
+  const hasExplicitScheme =
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ||
+    /^(?:javascript|data|vbscript|file|mailto|tel):/i.test(trimmed);
+  const normalized = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : hasExplicitScheme
+      ? trimmed
+      : `https://${trimmed}`;
   const parsed = new URL(normalized);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Only http and https URLs are supported.');

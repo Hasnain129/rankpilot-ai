@@ -3,12 +3,14 @@ import {
   GoogleAuthProvider,
   User,
   createUserWithEmailAndPassword,
+  getRedirectResult,
   onAuthStateChanged,
   reauthenticateWithPopup,
   sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
 } from 'firebase/auth';
@@ -17,11 +19,16 @@ import {
   OperationType,
   auth,
   db,
+  firebaseConfigSummary,
   googleProvider,
   handleFirestoreError,
   testFirestoreConnection,
 } from '../lib/firebase';
 import { UserProfile } from '../types';
+
+export interface FormattedAuthError extends Error {
+  code?: string;
+}
 
 interface AuthContextValue {
   user: User | null;
@@ -30,9 +37,12 @@ interface AuthContextValue {
   isDemoMode: boolean;
   firestoreConnected: boolean;
   gscAccessToken: string | null;
+  authRedirectError: FormattedAuthError | null;
+  clearAuthRedirectError: () => void;
   connectGoogleSearchConsole: () => Promise<string>;
   clearGscToken: () => void;
   signInWithGoogle: () => Promise<void>;
+  signInWithGoogleRedirect: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (name: string, companyName: string, email: string, password: string) => Promise<void>;
   sendResetPassword: (email: string) => Promise<void>;
@@ -46,28 +56,71 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function formatAuthError(err: unknown): Error {
+function makeAuthError(message: string, code?: string): FormattedAuthError {
+  const err = new Error(message) as FormattedAuthError;
+  if (code) err.code = code;
+  return err;
+}
+
+function formatAuthError(err: unknown): FormattedAuthError {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = String((err as { code: string }).code);
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+
+    if (code === 'auth/unauthorized-domain') {
+      return makeAuthError(
+        `Domain "${hostname}" is not authorized in Firebase project "${firebaseConfigSummary.projectId}". Add "${hostname}" under Firebase Console → Authentication → Settings → Authorized domains.`,
+        code
+      );
+    }
     if (code === 'auth/operation-not-allowed') {
-      return new Error(
-        'Email/Password sign-in is not yet enabled in Firebase Console (Authentication → Sign-in method). Use Google Sign-In or enable Email/Password in your Firebase Console.'
+      return makeAuthError(
+        `This sign-in provider is disabled in Firebase project "${firebaseConfigSummary.projectId}" (Authentication → Sign-in method). Enable Google or Email/Password in Firebase Console.`,
+        code
+      );
+    }
+    if (code === 'auth/popup-blocked') {
+      return makeAuthError(
+        'Browser blocked the Google sign-in popup window. Allow popups for this site or use Redirect Sign-In below.',
+        code
+      );
+    }
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      return makeAuthError('Sign-in popup was closed before completion.', code);
+    }
+    if (code === 'auth/account-exists-with-different-credential') {
+      return makeAuthError(
+        'An account with this email already exists using a different sign-in method. Sign in with your original method first.',
+        code
       );
     }
     if (code === 'auth/email-already-in-use') {
-      return new Error('An account with this email already exists. Try signing in instead.');
+      return makeAuthError('An account with this email already exists. Try signing in instead.', code);
     }
     if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-      return new Error('Invalid email or password.');
+      return makeAuthError('Invalid email or password.', code);
+    }
+    if (code === 'auth/invalid-email') {
+      return makeAuthError('Please enter a valid email address.', code);
     }
     if (code === 'auth/weak-password') {
-      return new Error('Password must be at least 6 characters.');
+      return makeAuthError('Password must be at least 6 characters.', code);
     }
-    if (code === 'auth/popup-closed-by-user') {
-      return new Error('Sign-in popup was closed before completion.');
+    if (code === 'auth/too-many-requests') {
+      return makeAuthError('Too many failed sign-in attempts. Please wait a few minutes and try again.', code);
     }
+    if (code === 'auth/network-request-failed') {
+      return makeAuthError('Network error while contacting Firebase Authentication. Check your connection and try again.', code);
+    }
+    if (code === 'auth/invalid-api-key' || code === 'auth/app-not-authorized') {
+      return makeAuthError(
+        `Firebase API key or application authorization failed for project "${firebaseConfigSummary.projectId}". Check API key restrictions in Google Cloud Console.`,
+        code
+      );
+    }
+    return makeAuthError(err instanceof Error ? err.message : 'Authentication failed.', code);
   }
-  return err instanceof Error ? err : new Error('Authentication failed.');
+  return err instanceof Error ? (err as FormattedAuthError) : makeAuthError('Authentication failed.');
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -79,9 +132,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [firestoreConnected, setFirestoreConnected] = useState(true);
   // Stored strictly in memory (never localStorage/sessionStorage)
   const [gscAccessToken, setGscAccessToken] = useState<string | null>(null);
+  const [authRedirectError, setAuthRedirectError] = useState<FormattedAuthError | null>(null);
 
   useEffect(() => {
     testFirestoreConnection().then(setFirestoreConnected);
+
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result) {
+          const cred = GoogleAuthProvider.credentialFromResult(result);
+          if (cred?.accessToken) {
+            // Preserve token in memory if GSC scope was consented via redirect
+            setGscAccessToken(cred.accessToken);
+          }
+          setIsDemoMode(false);
+        }
+      })
+      .catch((err) => {
+        setAuthRedirectError(formatAuthError(err));
+      });
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
@@ -161,9 +230,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearGscToken = () => setGscAccessToken(null);
 
   const signInWithGoogle = async () => {
+    setAuthRedirectError(null);
     try {
       await signInWithPopup(auth, googleProvider);
       setIsDemoMode(false);
+    } catch (err) {
+      const formatted = formatAuthError(err);
+      // On standalone top-level deployments (e.g. mobile / Vercel with strict popup blocking), fall back cleanly to redirect
+      if (
+        formatted.code === 'auth/popup-blocked' &&
+        typeof window !== 'undefined' &&
+        window.top === window.self
+      ) {
+        await signInWithRedirect(auth, googleProvider);
+        return;
+      }
+      throw formatted;
+    }
+  };
+
+  const signInWithGoogleRedirect = async () => {
+    setAuthRedirectError(null);
+    try {
+      await signInWithRedirect(auth, googleProvider);
     } catch (err) {
       throw formatAuthError(err);
     }
@@ -296,9 +385,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isDemoMode,
         firestoreConnected,
         gscAccessToken,
+        authRedirectError,
+        clearAuthRedirectError: () => setAuthRedirectError(null),
         connectGoogleSearchConsole,
         clearGscToken,
         signInWithGoogle,
+        signInWithGoogleRedirect,
         signInWithEmail,
         signUpWithEmail,
         sendResetPassword,

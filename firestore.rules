@@ -288,12 +288,22 @@ service cloud.firestore {
         && (!('websiteId' in data) || isStr(data.websiteId, 0, 128))
         && isStr(data.seedKeyword, 1, 160)
         && (!('targetMarket' in data) || isStr(data.targetMarket, 0, 80))
+        && (!('country' in data) || isStr(data.country, 2, 16))
+        && (!('language' in data) || isStr(data.language, 2, 16))
+        && (!('sourceType' in data) || data.sourceType in ['keyword', 'product', 'url', 'category'])
+        && (!('targetUrl' in data) || isStr(data.targetUrl, 0, 500))
+        && (!('dataNotice' in data) || isStr(data.dataNotice, 0, 600))
         && data.relatedKeywords is list && data.relatedKeywords.size() <= 25 && (data.relatedKeywords.size() == 0 || data.relatedKeywords[0] is map)
         && data.longTailKeywords is list && data.longTailKeywords.size() <= 25 && (data.longTailKeywords.size() == 0 || data.longTailKeywords[0] is map)
+        && (!('keywordItems' in data) || (data.keywordItems is list && data.keywordItems.size() <= 80 && (data.keywordItems.size() == 0 || data.keywordItems[0] is map)))
+        && (!('synonyms' in data) || (data.synonyms is list && data.synonyms.size() <= 30 && (data.synonyms.size() == 0 || data.synonyms[0] is string)))
+        && (!('opportunities' in data) || (data.opportunities is list && data.opportunities.size() <= 25 && (data.opportunities.size() == 0 || data.opportunities[0] is map)))
+        && (!('assignments' in data) || (data.assignments is list && data.assignments.size() <= 80 && (data.assignments.size() == 0 || data.assignments[0] is map)))
         && data.clusters is list && data.clusters.size() <= 15 && (data.clusters.size() == 0 || data.clusters[0] is map)
         && data.contentIdeas is list && data.contentIdeas.size() <= 15 && (data.contentIdeas.size() == 0 || data.contentIdeas[0] is map)
         && data.suggestedTitles is list && data.suggestedTitles.size() <= 15 && (data.suggestedTitles.size() == 0 || data.suggestedTitles[0] is string)
-        && data.createdAt is timestamp;
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
 
     function isValidGeneratedContent(data) {
@@ -681,11 +691,20 @@ service cloud.firestore {
       allow create: if isValidId(keywordId)
         && isVerified()
         && incoming().keys().hasAll(['ownerId', 'seedKeyword', 'relatedKeywords', 'longTailKeywords', 'clusters', 'contentIdeas', 'suggestedTitles', 'createdAt'])
-        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'seedKeyword', 'targetMarket', 'relatedKeywords', 'longTailKeywords', 'clusters', 'contentIdeas', 'suggestedTitles', 'createdAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'seedKeyword', 'targetMarket', 'country', 'language', 'sourceType', 'targetUrl', 'relatedKeywords', 'longTailKeywords', 'keywordItems', 'synonyms', 'opportunities', 'assignments', 'dataNotice', 'clusters', 'contentIdeas', 'suggestedTitles', 'createdAt', 'updatedAt'])
         && isValidKeywordResearch(incoming())
         && incoming().createdAt == request.time
+        && (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
         && (!('websiteId' in incoming()) || incoming().websiteId == '' || incoming().websiteId == 'all' || ownsWebsite(incoming().websiteId));
-      allow update: if false;
+      allow update: if isValidId(keywordId)
+        && isVerified()
+        && isValidKeywordResearch(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().seedKeyword == existing().seedKeyword
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['assignments', 'updatedAt']);
       allow delete: if isValidId(keywordId) && isVerified() && existing().ownerId == request.auth.uid;
     }
 

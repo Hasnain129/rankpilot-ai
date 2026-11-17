@@ -1,11 +1,21 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowRight, CheckCircle2, Globe, Lock, Mail, Moon, Sparkles, Sun, TrendingUp } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import { FormattedAuthError, useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../context/ToastContext';
+import { firebaseConfigSummary } from '../lib/firebase';
 
 export function AuthView() {
-  const { signInWithGoogle, signInWithEmail, signUpWithEmail, sendResetPassword, enterDemoMode } = useAuth();
+  const {
+    signInWithGoogle,
+    signInWithGoogleRedirect,
+    signInWithEmail,
+    signUpWithEmail,
+    sendResetPassword,
+    enterDemoMode,
+    authRedirectError,
+    clearAuthRedirectError,
+  } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
 
@@ -16,10 +26,24 @@ export function AuthView() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (authRedirectError) {
+      setErrorMsg(authRedirectError.message);
+      setErrorCode(authRedirectError.code || null);
+    }
+  }, [authRedirectError]);
+
+  const clearError = () => {
+    setErrorMsg(null);
+    setErrorCode(null);
+    clearAuthRedirectError();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
+    clearError();
     setSubmitting(true);
     try {
       if (mode === 'login') {
@@ -42,24 +66,43 @@ export function AuthView() {
         setMode('login');
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Authentication failed.');
+      const f = err as FormattedAuthError;
+      setErrorMsg(f instanceof Error ? f.message : 'Authentication failed.');
+      setErrorCode(f?.code || null);
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleGoogle = async () => {
-    setErrorMsg(null);
+    clearError();
     setSubmitting(true);
     try {
       await signInWithGoogle();
       toast({ title: 'Signed in with Google', variant: 'success' });
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Google sign-in failed.');
+      const f = err as FormattedAuthError;
+      setErrorMsg(f instanceof Error ? f.message : 'Google sign-in failed.');
+      setErrorCode(f?.code || null);
     } finally {
       setSubmitting(false);
     }
   };
+
+  const handleGoogleRedirect = async () => {
+    clearError();
+    setSubmitting(true);
+    try {
+      await signInWithGoogleRedirect();
+    } catch (err) {
+      const f = err as FormattedAuthError;
+      setErrorMsg(f instanceof Error ? f.message : 'Google redirect sign-in failed.');
+      setErrorCode(f?.code || null);
+      setSubmitting(false);
+    }
+  };
+
+  const currentHostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col">
@@ -94,7 +137,7 @@ export function AuthView() {
         {/* Left Editorial Column */}
         <div className="lg:col-span-7 space-y-6">
           <div className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
-            RankPilot AI · Multi-Website SEO & Revenue Intelligence
+            RankPilot AI · Multi-Website SEO &amp; Revenue Intelligence
           </div>
           <h1 className="font-display text-4xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-5xl text-balance">
             Rank. Convert. Grow.
@@ -108,7 +151,7 @@ export function AuthView() {
               <Globe className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
               <h2 className="mt-2.5 text-sm font-semibold">Live SEO Audits</h2>
               <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                Real HTTP crawling, meta & heading checks, broken links, and Gemini action plans.
+                Real HTTP crawling, meta &amp; heading checks, broken links, and Gemini action plans.
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -120,7 +163,7 @@ export function AuthView() {
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
               <CheckCircle2 className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="mt-2.5 text-sm font-semibold">Pipeline & Sales</h2>
+              <h2 className="mt-2.5 text-sm font-semibold">Pipeline &amp; Sales</h2>
               <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
                 Track leads, quotes, orders, and revenue attribution per website and channel.
               </p>
@@ -170,8 +213,26 @@ export function AuthView() {
             )}
 
             {errorMsg && (
-              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                {errorMsg}
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 space-y-2 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                <div>{errorMsg}</div>
+                {errorCode === 'auth/unauthorized-domain' && (
+                  <div className="border-t border-red-200 pt-2 font-mono text-[11px] text-red-800 dark:border-red-900/50 dark:text-red-200 space-y-0.5">
+                    <div>Domain to authorize: {currentHostname}</div>
+                    <div>Firebase Project: {firebaseConfigSummary.projectId}</div>
+                    <div>Auth Handler: {firebaseConfigSummary.authDomain}</div>
+                  </div>
+                )}
+                {(errorCode === 'auth/popup-blocked' || errorCode === 'auth/popup-closed-by-user') &&
+                  typeof window !== 'undefined' &&
+                  window.top === window.self && (
+                    <button
+                      type="button"
+                      onClick={handleGoogleRedirect}
+                      className="inline-block font-semibold text-indigo-700 underline dark:text-indigo-300"
+                    >
+                      Try Google Redirect Sign-In instead
+                    </button>
+                  )}
               </div>
             )}
 

@@ -282,19 +282,29 @@
     },
     "KeywordResearch": {
       "title": "KeywordResearch",
-      "description": "AI-generated keyword research and topic cluster project",
+      "description": "AI-generated keyword research, clustered metrics, opportunities, and page assignments",
       "type": "object",
       "properties": {
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "websiteId": { "type": "string", "maxLength": 128 },
         "seedKeyword": { "type": "string", "minLength": 1, "maxLength": 160 },
         "targetMarket": { "type": "string", "maxLength": 80 },
+        "country": { "type": "string", "minLength": 2, "maxLength": 16 },
+        "language": { "type": "string", "minLength": 2, "maxLength": 16 },
+        "sourceType": { "type": "string", "enum": ["keyword", "product", "url", "category"] },
+        "targetUrl": { "type": "string", "maxLength": 500 },
         "relatedKeywords": { "type": "array" },
         "longTailKeywords": { "type": "array" },
+        "keywordItems": { "type": "array" },
+        "synonyms": { "type": "array" },
+        "opportunities": { "type": "array" },
+        "assignments": { "type": "array" },
+        "dataNotice": { "type": "string", "maxLength": 600 },
         "clusters": { "type": "array" },
         "contentIdeas": { "type": "array" },
         "suggestedTitles": { "type": "array" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["ownerId", "seedKeyword", "relatedKeywords", "longTailKeywords", "clusters", "contentIdeas", "suggestedTitles", "createdAt"]
     },
