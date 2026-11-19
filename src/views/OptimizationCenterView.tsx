@@ -18,7 +18,6 @@ import {
   XCircle,
 } from 'lucide-react';
 import { EmptyState, ErrorBanner, StatusText } from '../components/ui/DataState';
-import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { apiFetch } from '../lib/apiClient';
 import {
@@ -27,10 +26,12 @@ import {
   SeoAudit,
   SeoOptimization,
   SiteCrawl,
+  SyncLog,
   Website,
   WpConnection,
   WpEntity,
 } from '../types';
+import { WordPressView } from './WordPressView';
 
 export interface OptimizationPrefill {
   websiteId: string;
@@ -46,9 +47,12 @@ interface OptimizationCenterViewProps {
   websites: Website[];
   wpConnections: WpConnection[];
   wpEntities: WpEntity[];
+  syncLogs: SyncLog[];
   siteCrawls: SiteCrawl[];
   optimizations: SeoOptimization[];
   selectedWebsiteId: string;
+  initialTab?: 'drafts' | 'wordpress';
+  onConsumeInitialTab?: () => void;
   prefill?: OptimizationPrefill | null;
   onClearPrefill?: () => void;
   onCreateOptimization: (input: {
@@ -77,7 +81,6 @@ interface OptimizationCenterViewProps {
   onDeleteOptimization: (id: string) => Promise<void>;
   onSaveAudit: (websiteId: string, audit: Omit<SeoAudit, 'id' | 'ownerId' | 'websiteId' | 'createdAt'>) => Promise<void>;
   onAddWebsitePrompt: () => void;
-  onNavigateToWordPress: () => void;
 }
 
 type StatusFilter = 'all' | SeoOptimization['status'];
@@ -104,9 +107,12 @@ export function OptimizationCenterView({
   websites,
   wpConnections,
   wpEntities,
+  syncLogs,
   siteCrawls,
   optimizations,
   selectedWebsiteId,
+  initialTab,
+  onConsumeInitialTab,
   prefill,
   onClearPrefill,
   onCreateOptimization,
@@ -114,11 +120,10 @@ export function OptimizationCenterView({
   onDeleteOptimization,
   onSaveAudit,
   onAddWebsitePrompt,
-  onNavigateToWordPress,
 }: OptimizationCenterViewProps) {
-  const { isDemoMode } = useAuth();
   const { toast } = useToast();
 
+  const [activeTab, setActiveTab] = useState<'drafts' | 'wordpress'>(initialTab || 'drafts');
   const defaultSiteId = selectedWebsiteId !== 'all' ? selectedWebsiteId : websites[0]?.id || '';
   const [targetWebsiteId, setTargetWebsiteId] = useState(defaultSiteId);
   const [targetKey, setTargetKey] = useState('');
@@ -212,9 +217,16 @@ export function OptimizationCenterView({
     return opts;
   }, [scopedWpEntities, scopedCrawlPages]);
 
+  useEffect(() => {
+    if (!initialTab) return;
+    setActiveTab(initialTab);
+    onConsumeInitialTab?.();
+  }, [initialTab, onConsumeInitialTab]);
+
   // Handle prefill from SeoAnalyzerView / WordPressView / SearchConsoleView
   useEffect(() => {
     if (!prefill) return;
+    setActiveTab('drafts');
     if (prefill.websiteId) setTargetWebsiteId(prefill.websiteId);
     if (prefill.targetKeyword) setTargetKeyword(prefill.targetKeyword);
     if (prefill.entityId) {
@@ -293,15 +305,6 @@ export function OptimizationCenterView({
     const resolvedUrl = chosen?.url || customUrl.trim();
     if (!resolvedUrl) {
       setActionError('Select an imported page/product or enter a target URL.');
-      return;
-    }
-
-    if (isDemoMode) {
-      toast({
-        title: 'Demo Mode Preview',
-        description: 'Sign in with a verified account to run live Gemini SEO optimization drafts.',
-        variant: 'info',
-      });
       return;
     }
 
@@ -426,14 +429,6 @@ export function OptimizationCenterView({
   const handleApplyToWordPress = async () => {
     if (!selectedOpt) return;
     setConfirmApplyOpen(false);
-    if (isDemoMode) {
-      toast({
-        title: 'Demo Mode',
-        description: 'Live WordPress REST mutation is disabled in Demo Mode.',
-        variant: 'info',
-      });
-      return;
-    }
     setApplyingLive(true);
     setActionError(null);
     try {
@@ -459,10 +454,6 @@ export function OptimizationCenterView({
 
   const handleRollback = async () => {
     if (!selectedOpt || selectedOpt.status !== 'applied') return;
-    if (isDemoMode) {
-      toast({ title: 'Demo Mode', description: 'Rollback runs against a connected WordPress site.', variant: 'info' });
-      return;
-    }
     setRollingBack(true);
     setActionError(null);
     try {
@@ -486,10 +477,6 @@ export function OptimizationCenterView({
 
   const handleRecheckLivePage = async () => {
     if (!selectedOpt?.targetUrl) return;
-    if (isDemoMode) {
-      toast({ title: 'Demo Mode', description: 'Live crawler requires an authenticated workspace.', variant: 'info' });
-      return;
-    }
     setRechecking(true);
     try {
       const data = await apiFetch<Omit<SeoAudit, 'id' | 'ownerId' | 'websiteId' | 'createdAt'>>(
@@ -522,23 +509,69 @@ export function OptimizationCenterView({
 
   return (
     <div className="space-y-6">
-      {/* Safety Guarantee Banner */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-start gap-2.5 text-slate-700 dark:text-slate-300">
-          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-          <div>
-            <strong>Human-in-the-Loop Guarantee:</strong> AI drafts are saved with a full original snapshot. Live WordPress/WooCommerce records are never modified until you explicitly approve and confirm deployment, with one-click rollback.
-          </div>
+      {/* Sub-navigation Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1 w-fit dark:border-slate-800 dark:bg-slate-900">
+          <button
+            type="button"
+            onClick={() => setActiveTab('drafts')}
+            className={`rounded-md px-3.5 py-1.5 text-xs font-medium transition-colors ${
+              activeTab === 'drafts'
+                ? 'bg-indigo-600 text-white'
+                : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+            }`}
+          >
+            On-Page SEO Drafts ({scopedOptimizations.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('wordpress')}
+            className={`rounded-md px-3.5 py-1.5 text-xs font-medium transition-colors ${
+              activeTab === 'wordpress'
+                ? 'bg-indigo-600 text-white'
+                : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+            }`}
+          >
+            WordPress &amp; WooCommerce Sync ({wpEntities.length})
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onNavigateToWordPress}
-          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400 whitespace-nowrap"
-        >
-          <span>WordPress / Woo Sync</span>
-          <ArrowRight className="h-3.5 w-3.5" />
-        </button>
       </div>
+
+      {activeTab === 'wordpress' ? (
+        <WordPressView
+          websites={websites}
+          wpConnections={wpConnections}
+          wpEntities={wpEntities}
+          syncLogs={syncLogs}
+          selectedWebsiteId={selectedWebsiteId}
+          onAddWebsitePrompt={onAddWebsitePrompt}
+          onOptimizeEntity={(entity) => {
+            setTargetWebsiteId(entity.websiteId);
+            setTargetKey(`wpe:${entity.id}`);
+            setCustomUrl('');
+            setTargetKeyword(entity.focusKeyword || '');
+            setActiveTab('drafts');
+          }}
+        />
+      ) : (
+        <>
+          {/* Safety Guarantee Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-start gap-2.5 text-slate-700 dark:text-slate-300">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <div>
+                <strong>Human-in-the-Loop Guarantee:</strong> AI drafts are saved with a full original snapshot. Live WordPress/WooCommerce records are never modified until you explicitly approve and confirm deployment, with one-click rollback.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('wordpress')}
+              className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400 whitespace-nowrap"
+            >
+              <span>WordPress / Woo Sync</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
 
       {/* Generator Bar */}
       <form
@@ -1095,6 +1128,8 @@ export function OptimizationCenterView({
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

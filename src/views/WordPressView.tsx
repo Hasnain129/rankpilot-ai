@@ -12,7 +12,6 @@ import {
   Wand2,
 } from 'lucide-react';
 import { EmptyState, ErrorBanner, StatusText } from '../components/ui/DataState';
-import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { apiFetch } from '../lib/apiClient';
 import { SyncLog, Website, WpConnection, WpEntity } from '../types';
@@ -55,7 +54,6 @@ export function WordPressView({
   onAddWebsitePrompt,
   onOptimizeEntity,
 }: WordPressViewProps) {
-  const { isDemoMode } = useAuth();
   const { toast } = useToast();
 
   const defaultSite =
@@ -135,14 +133,6 @@ export function WordPressView({
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (isDemoMode) {
-      toast({
-        title: 'Demo Mode',
-        description: 'Sign in with a verified account to connect live WordPress/WooCommerce credentials.',
-        variant: 'info',
-      });
-      return;
-    }
     setConnecting(true);
     try {
       const data = await apiFetch<{ message: string }>('/api/wordpress/connect', {
@@ -177,10 +167,6 @@ export function WordPressView({
 
   const handleImportCatalog = async () => {
     setError(null);
-    if (isDemoMode) {
-      toast({ title: 'Demo Mode', description: 'Live catalog import requires an authenticated account.', variant: 'info' });
-      return;
-    }
     setImporting(true);
     try {
       const data = await apiFetch<{ importedCount: number; warnings?: string[]; seoPlugin: string }>(
@@ -208,7 +194,6 @@ export function WordPressView({
   };
 
   const handleDisconnect = async () => {
-    if (isDemoMode) return;
     setDisconnecting(true);
     try {
       await apiFetch<{ ok: boolean }>(`/api/wordpress/disconnect?websiteId=${encodeURIComponent(activeSite.id)}`, {

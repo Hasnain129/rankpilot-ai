@@ -19,7 +19,6 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { EmptyState, ErrorBanner, StatusText } from '../components/ui/DataState';
-import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { apiFetch } from '../lib/apiClient';
 import {
@@ -43,7 +42,7 @@ interface KeywordResearchViewProps {
   onSaveProject: (project: Omit<KeywordProject, 'id' | 'ownerId' | 'createdAt'>) => Promise<string | void>;
   onAssignKeywordToPage: (projectId: string, assignment: KeywordAssignment) => Promise<void>;
   onDeleteProject: (id: string) => Promise<void>;
-  onSendToContentStudio: (keyword: string, suggestedTitle?: string) => void;
+  onSendToOnPageSeo: (keyword: string, suggestedTitle?: string) => void;
   onAddTrackedKeyword: (input: {
     websiteId: string;
     keyword: string;
@@ -152,10 +151,9 @@ export function KeywordResearchView({
   onSaveProject,
   onAssignKeywordToPage,
   onDeleteProject,
-  onSendToContentStudio,
+  onSendToOnPageSeo,
   onAddTrackedKeyword,
 }: KeywordResearchViewProps) {
-  const { isDemoMode } = useAuth();
   const { toast } = useToast();
 
   const [tab, setTab] = useState<ResearchTab>('discovery');
@@ -208,63 +206,6 @@ export function KeywordResearchView({
 
   // Load verified provider connection status
   useEffect(() => {
-    if (isDemoMode) {
-      setProviders([
-        {
-          id: 'gemini_ai',
-          name: 'Gemini AI Strategy Engine',
-          connected: true,
-          capability: 'Keyword discovery, long-tail & question ideation, search intent & clustering',
-          pricingTier: 'Server API Key',
-          missingEnvVars: [],
-          note: 'Demo mode sample active. Never fabricates numeric monthly search volume or CPC.',
-        },
-        {
-          id: 'google_search_console',
-          name: 'Google Search Console (OAuth)',
-          connected: false,
-          capability: 'Verified clicks, impressions, CTR & rankings for owned domains',
-          pricingTier: 'Free OAuth',
-          missingEnvVars: [],
-          note: 'Sign in with a verified account to connect Google Search Console OAuth.',
-        },
-        {
-          id: 'google_ads',
-          name: 'Google Ads Keyword Planner API',
-          connected: false,
-          capability: 'Verified monthly search volume, competition index & CPC bids',
-          pricingTier: 'API free; requires Google Ads account + Standard Access',
-          missingEnvVars: [
-            'GOOGLE_ADS_DEVELOPER_TOKEN',
-            'GOOGLE_ADS_CLIENT_ID',
-            'GOOGLE_ADS_CLIENT_SECRET',
-            'GOOGLE_ADS_REFRESH_TOKEN',
-            'GOOGLE_ADS_CUSTOMER_ID',
-          ],
-          note: 'Not configured. Monthly search volume and CPC remain Unavailable.',
-        },
-        {
-          id: 'dataforseo',
-          name: 'DataForSEO / Google Ads Metrics API',
-          connected: false,
-          capability: 'Verified monthly search volume & CPC across 200+ countries',
-          pricingTier: 'Paid Third-Party API',
-          missingEnvVars: ['DATAFORSEO_LOGIN', 'DATAFORSEO_PASSWORD'],
-          note: 'Not configured on server.',
-        },
-        {
-          id: 'serp_api',
-          name: 'Authorized SERP Rank Tracker API',
-          connected: false,
-          capability: 'External Google rank tracking by country & device',
-          pricingTier: 'Paid Third-Party API',
-          missingEnvVars: ['SERP_API_KEY'],
-          note: 'Optional beyond Google Search Console.',
-        },
-      ]);
-      return;
-    }
-
     let cancelled = false;
     setProvidersLoading(true);
     apiFetch<{ providers: KeywordProviderStatus[] }>('/api/keywords/providers')
@@ -282,7 +223,7 @@ export function KeywordResearchView({
     return () => {
       cancelled = true;
     };
-  }, [isDemoMode]);
+  }, []);
 
   const inventoryPages = useMemo(() => {
     if (!activeWebsite) return [];
@@ -337,6 +278,20 @@ export function KeywordResearchView({
   }, [currentProject]);
 
   const allMetricRows = useMemo(() => buildLegacyKeywordItems(currentProject), [currentProject]);
+  const hasVolumeCol = useMemo(
+    () => allMetricRows.some((r) => r.searchVolume !== null),
+    [allMetricRows]
+  );
+  const hasKdCol = useMemo(
+    () => allMetricRows.some((r) => r.keywordDifficulty !== null),
+    [allMetricRows]
+  );
+  const hasCpcCol = useMemo(
+    () => allMetricRows.some((r) => r.cpc !== null),
+    [allMetricRows]
+  );
+  const hasVerifiedMetrics = hasVolumeCol || hasKdCol || hasCpcCol;
+  const visibleColCount = 6 + (hasVolumeCol ? 1 : 0) + (hasKdCol ? 1 : 0) + (hasCpcCol ? 1 : 0);
 
   const filteredAndSortedRows = useMemo(() => {
     const searchLower = tableSearch.trim().toLowerCase();
@@ -448,10 +403,10 @@ export function KeywordResearchView({
     const headers = [
       'Keyword',
       'Category',
-      'Search Volume',
-      'Keyword Difficulty',
+      ...(hasVolumeCol ? ['Search Volume'] : []),
+      ...(hasKdCol ? ['Keyword Difficulty'] : []),
       'Search Intent',
-      'CPC (USD)',
+      ...(hasCpcCol ? ['CPC (USD)'] : []),
       'Competition',
       'Country',
       'Language',
@@ -467,10 +422,10 @@ export function KeywordResearchView({
         return [
           row.keyword,
           row.category,
-          row.searchVolume === null ? 'Unavailable' : row.searchVolume,
-          row.keywordDifficulty === null ? 'Unavailable' : row.keywordDifficulty,
+          ...(hasVolumeCol ? [row.searchVolume === null ? '' : row.searchVolume] : []),
+          ...(hasKdCol ? [row.keywordDifficulty === null ? '' : row.keywordDifficulty] : []),
           row.intent,
-          row.cpc === null ? 'Unavailable' : row.cpc.toFixed(2),
+          ...(hasCpcCol ? [row.cpc === null ? '' : row.cpc.toFixed(2)] : []),
           row.competition || row.competitionEstimate,
           row.country,
           row.language,
@@ -609,10 +564,10 @@ export function KeywordResearchView({
         <div className="flex items-start gap-2.5 max-w-4xl">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-400" />
           <div>
-            <strong>Verified Metrics vs. AI Estimates:</strong>{' '}
+            <strong>Verified Sources &amp; AI Strategy:</strong>{' '}
             {verifiedProviderActive
-              ? 'A verified keyword data provider is connected on the server. Monthly search volume and CPC values show live API figures; AI qualitative fields remain labeled.'
-              : 'No paid keyword volume API (Google Ads Keyword Planner or DataForSEO) is currently configured on the server. RankPilot never invents fake monthly search volumes, CPCs, or ranking positions — unavailable numeric metrics are marked clearly while AI supplies intent, clustering, and strategic opportunities.'}
+              ? 'An optional keyword data provider is connected on the server. Monthly search volume and CPC values show live API figures; AI qualitative fields remain labeled.'
+              : 'Keyword discovery, search intent, clustering, and page opportunities run on Gemini AI and your synced website catalog, with Google Search Console providing verified organic search performance. Unconnected numeric volume and CPC columns are hidden.'}
           </div>
         </div>
         <button
@@ -910,8 +865,9 @@ export function KeywordResearchView({
                       Keyword Metrics · {currentProject.seedKeyword}
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                      {currentProject.dataNotice ||
-                        'Showing AI keyword strategy. Numeric volume & CPC require verified Google Ads or DataForSEO credentials.'}
+                      {hasVerifiedMetrics
+                        ? currentProject.dataNotice || 'Showing verified keyword metrics alongside AI strategy.'
+                        : 'Showing AI keyword strategy, search intent, and page opportunities. Verified organic performance is synced via Google Search Console.'}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -984,30 +940,36 @@ export function KeywordResearchView({
                           <ArrowUpDown className="h-3 w-3" />
                         </button>
                       </th>
-                      <th className="px-3 py-2.5 font-medium text-right">
-                        <button type="button" onClick={() => toggleSort('searchVolume')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
-                          <span>Search Vol.</span>
-                          <ArrowUpDown className="h-3 w-3" />
-                        </button>
-                      </th>
-                      <th className="px-3 py-2.5 font-medium text-right">
-                        <button type="button" onClick={() => toggleSort('keywordDifficulty')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
-                          <span>KD</span>
-                          <ArrowUpDown className="h-3 w-3" />
-                        </button>
-                      </th>
+                      {hasVolumeCol && (
+                        <th className="px-3 py-2.5 font-medium text-right">
+                          <button type="button" onClick={() => toggleSort('searchVolume')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
+                            <span>Search Vol.</span>
+                            <ArrowUpDown className="h-3 w-3" />
+                          </button>
+                        </th>
+                      )}
+                      {hasKdCol && (
+                        <th className="px-3 py-2.5 font-medium text-right">
+                          <button type="button" onClick={() => toggleSort('keywordDifficulty')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
+                            <span>KD</span>
+                            <ArrowUpDown className="h-3 w-3" />
+                          </button>
+                        </th>
+                      )}
                       <th className="px-3 py-2.5 font-medium">
                         <button type="button" onClick={() => toggleSort('intent')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
                           <span>Intent</span>
                           <ArrowUpDown className="h-3 w-3" />
                         </button>
                       </th>
-                      <th className="px-3 py-2.5 font-medium text-right">
-                        <button type="button" onClick={() => toggleSort('cpc')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
-                          <span>CPC</span>
-                          <ArrowUpDown className="h-3 w-3" />
-                        </button>
-                      </th>
+                      {hasCpcCol && (
+                        <th className="px-3 py-2.5 font-medium text-right">
+                          <button type="button" onClick={() => toggleSort('cpc')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
+                            <span>CPC</span>
+                            <ArrowUpDown className="h-3 w-3" />
+                          </button>
+                        </th>
+                      )}
                       <th className="px-3 py-2.5 font-medium">Competition</th>
                       <th className="px-3 py-2.5 font-medium">
                         <button type="button" onClick={() => toggleSort('country')} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200">
@@ -1027,7 +989,7 @@ export function KeywordResearchView({
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                     {pagedRows.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                        <td colSpan={visibleColCount} className="px-4 py-8 text-center text-slate-500">
                           No keywords match the active filter criteria.
                         </td>
                       </tr>
@@ -1055,36 +1017,38 @@ export function KeywordResearchView({
                                 </div>
                               )}
                             </td>
-                            <td className="px-3 py-3 text-right font-mono tabular-nums whitespace-nowrap">
-                              {row.searchVolume !== null ? (
-                                <span className="font-semibold text-slate-900 dark:text-slate-100">
-                                  {row.searchVolume.toLocaleString()}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400" title="Connect Google Ads Keyword Planner or DataForSEO">
-                                  Unavailable
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono tabular-nums whitespace-nowrap">
-                              {row.keywordDifficulty !== null ? (
-                                <span className="font-semibold">{row.keywordDifficulty}/100</span>
-                              ) : (
-                                <span className="text-slate-400" title="Requires verified SEO KD provider">
-                                  Unavailable
-                                </span>
-                              )}
-                            </td>
+                            {hasVolumeCol && (
+                              <td className="px-3 py-3 text-right font-mono tabular-nums whitespace-nowrap">
+                                {row.searchVolume !== null ? (
+                                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                    {row.searchVolume.toLocaleString()}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                            )}
+                            {hasKdCol && (
+                              <td className="px-3 py-3 text-right font-mono tabular-nums whitespace-nowrap">
+                                {row.keywordDifficulty !== null ? (
+                                  <span className="font-semibold">{row.keywordDifficulty}/100</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                            )}
                             <td className="px-3 py-3 whitespace-nowrap text-slate-700 dark:text-slate-300">
                               {row.intent}
                             </td>
-                            <td className="px-3 py-3 text-right font-mono tabular-nums whitespace-nowrap">
-                              {row.cpc !== null ? (
-                                <span className="font-medium">${row.cpc.toFixed(2)}</span>
-                              ) : (
-                                <span className="text-slate-400">Unavailable</span>
-                              )}
-                            </td>
+                            {hasCpcCol && (
+                              <td className="px-3 py-3 text-right font-mono tabular-nums whitespace-nowrap">
+                                {row.cpc !== null ? (
+                                  <span className="font-medium">${row.cpc.toFixed(2)}</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                            )}
                             <td className="px-3 py-3 whitespace-nowrap">
                               {row.competition ? (
                                 <span className="font-medium text-slate-900 dark:text-slate-100">
@@ -1147,10 +1111,10 @@ export function KeywordResearchView({
                                 )}
                                 <button
                                   type="button"
-                                  onClick={() => onSendToContentStudio(row.keyword)}
+                                  onClick={() => onSendToOnPageSeo(row.keyword)}
                                   className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                                 >
-                                  Draft
+                                  Optimize
                                 </button>
                               </div>
                             </td>
@@ -1300,10 +1264,10 @@ export function KeywordResearchView({
                     </div>
                     <button
                       type="button"
-                      onClick={() => onSendToContentStudio(idea.targetKeyword, idea.title)}
+                      onClick={() => onSendToOnPageSeo(idea.targetKeyword, idea.title)}
                       className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1 text-[11px] font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
                     >
-                      Generate
+                      Optimize
                     </button>
                   </div>
                 ))}
@@ -1384,10 +1348,10 @@ export function KeywordResearchView({
                               </span>
                               <button
                                 type="button"
-                                onClick={() => onSendToContentStudio(item.keyword)}
+                                onClick={() => onSendToOnPageSeo(item.keyword)}
                                 className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                               >
-                                Draft {item.recommendedAssetType}
+                                Optimize {item.recommendedAssetType}
                               </button>
                             </div>
                           </div>
@@ -1524,10 +1488,10 @@ export function KeywordResearchView({
                               )}
                               <button
                                 type="button"
-                                onClick={() => onSendToContentStudio(m.primaryKeyword)}
+                                onClick={() => onSendToOnPageSeo(m.primaryKeyword)}
                                 className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                               >
-                                Draft
+                                Optimize
                               </button>
                             </div>
                           </td>
@@ -1669,10 +1633,10 @@ export function KeywordResearchView({
                               )}
                               <button
                                 type="button"
-                                onClick={() => onSendToContentStudio(dk.keyword)}
+                                onClick={() => onSendToOnPageSeo(dk.keyword)}
                                 className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                               >
-                                Draft
+                                Optimize
                               </button>
                             </div>
                           </td>
@@ -1693,10 +1657,10 @@ export function KeywordResearchView({
                           <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">{gap.topic}</span>
                           <button
                             type="button"
-                            onClick={() => onSendToContentStudio(gap.targetKeyword, gap.suggestedTitle)}
+                            onClick={() => onSendToOnPageSeo(gap.targetKeyword, gap.suggestedTitle)}
                             className="text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                           >
-                            Write Article
+                            Draft in On-Page SEO
                           </button>
                         </div>
                         <p className="text-xs text-slate-600 dark:text-slate-300">{gap.competitorAngle}</p>
@@ -1736,17 +1700,17 @@ export function KeywordResearchView({
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{p.name}</h3>
                     <StatusText
-                      label={p.connected ? 'Connected' : 'Not Configured'}
+                      label={p.connected ? 'Connected' : p.id === 'gemini_ai' ? 'Not Configured' : 'Optional · Inactive'}
                       tone={p.connected ? 'success' : 'neutral'}
                     />
                   </div>
                   <div className="text-xs text-slate-600 dark:text-slate-300">{p.capability}</div>
                   <div className="flex items-center gap-2 text-[11px] font-medium text-indigo-600 dark:text-indigo-400">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    <span>Cost Model: {p.pricingTier}</span>
+                    <span>Model: {p.pricingTier}</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">{p.note}</p>
-                  {p.missingEnvVars.length > 0 && (
+                  {p.id === 'gemini_ai' && p.missingEnvVars.length > 0 && (
                     <div className="border-t border-slate-100 pt-2 font-mono text-[11px] text-slate-500 dark:border-slate-800">
                       Required Server Env: {p.missingEnvVars.join(', ')}
                     </div>

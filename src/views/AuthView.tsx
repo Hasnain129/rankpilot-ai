@@ -12,7 +12,6 @@ export function AuthView() {
     signInWithEmail,
     signUpWithEmail,
     sendResetPassword,
-    enterDemoMode,
     authRedirectError,
     clearAuthRedirectError,
   } = useAuth();
@@ -123,13 +122,6 @@ export function AuthView() {
             {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
             <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
           </button>
-          <button
-            type="button"
-            onClick={enterDemoMode}
-            className="rounded-lg border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700 whitespace-nowrap"
-          >
-            Explore Demo Mode
-          </button>
         </div>
       </header>
 
@@ -137,13 +129,13 @@ export function AuthView() {
         {/* Left Editorial Column */}
         <div className="lg:col-span-7 space-y-6">
           <div className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
-            RankPilot AI · Multi-Website SEO &amp; Revenue Intelligence
+            RankPilot AI · Organic SEO Growth Platform
           </div>
           <h1 className="font-display text-4xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-5xl text-balance">
             Rank. Convert. Grow.
           </h1>
           <p className="max-w-xl text-base leading-relaxed text-slate-600 dark:text-slate-300">
-            Audit live websites for technical SEO, generate AI keyword clusters and conversion copy, install lightweight visitor tracking, and connect organic traffic directly to leads, quotes, and orders.
+            Audit live websites for technical and on-page SEO, sync Google Search Console and GA4 telemetry, optimize WordPress and WooCommerce pages, and act on prioritized AI SEO plans.
           </p>
 
           <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-3">
@@ -151,21 +143,21 @@ export function AuthView() {
               <Globe className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
               <h2 className="mt-2.5 text-sm font-semibold">Live SEO Audits</h2>
               <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                Real HTTP crawling, meta &amp; heading checks, broken links, and Gemini action plans.
+                Multi-page crawling, metadata &amp; heading checks, Core Web Vitals, and broken link detection.
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
               <TrendingUp className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="mt-2.5 text-sm font-semibold">Visitor Tracking</h2>
+              <h2 className="mt-2.5 text-sm font-semibold">GSC &amp; GA4 Telemetry</h2>
               <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                Lightweight script tracking sessions, UTMs, referrers, and conversion goals.
+                Verified Search Console clicks, impressions, rank tracking, and Google Analytics 4 conversions.
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
               <CheckCircle2 className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="mt-2.5 text-sm font-semibold">Pipeline &amp; Sales</h2>
+              <h2 className="mt-2.5 text-sm font-semibold">On-Page &amp; Woo Sync</h2>
               <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                Track leads, quotes, orders, and revenue attribution per website and channel.
+                Generate AI keyword clusters, review metadata diffs, and deploy approved updates to WordPress.
               </p>
             </div>
           </div>
@@ -181,7 +173,7 @@ export function AuthView() {
                 {mode === 'forgot' && 'Reset your password'}
               </h2>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {mode === 'login' && 'Manage your connected websites, SEO audits, and revenue pipeline.'}
+                {mode === 'login' && 'Manage your connected websites, SEO audits, and Search Console metrics.'}
                 {mode === 'signup' && 'Each account gets isolated multi-tenant Cloud Firestore storage.'}
                 {mode === 'forgot' && 'Enter your email address to receive a password reset link.'}
               </p>

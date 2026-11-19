@@ -1,28 +1,22 @@
 import React, { useState } from 'react';
 import {
-  Activity,
-  BarChart3,
-  FileText,
+  FileBarChart,
   Gauge,
   Globe,
-  Layers,
   LayoutDashboard,
   LineChart,
   LogOut,
   Menu,
   Moon,
+  PieChart,
   Plus,
-  Receipt,
   Search,
   Settings,
-  ShoppingBag,
   Sparkles,
-  Store,
   Sun,
   Target,
   TrendingUp,
   UserCheck,
-  Users,
   Wand2,
   X,
 } from 'lucide-react';
@@ -46,60 +40,42 @@ const NAV_GROUPS: Array<{
   items: Array<{ id: NavSection; label: string; icon: React.ComponentType<{ className?: string }> }>;
 }> = [
   {
-    heading: 'Overview',
-    items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }],
-  },
-  {
-    heading: 'SEO Growth Engine',
+    heading: 'SEO GROWTH',
     items: [
-      { id: 'websites', label: 'Websites', icon: Globe },
-      { id: 'seo-analyzer', label: 'Site SEO Audit', icon: Search },
-      { id: 'keyword-research', label: 'Keyword Strategy', icon: TrendingUp },
-      { id: 'optimization-center', label: 'Optimization Center', icon: Wand2 },
-      { id: 'wordpress-woo', label: 'WordPress & Woo', icon: Store },
-      { id: 'search-console', label: 'Search Console', icon: LineChart },
-      { id: 'rank-tracker', label: 'Rank Tracker', icon: Target },
-      { id: 'technical-monitor', label: 'Technical Monitor', icon: Gauge },
-      { id: 'content-studio', label: 'Content Studio', icon: FileText },
+      { id: 'dashboard', label: 'SEO Dashboard', icon: LayoutDashboard },
+      { id: 'website-audit', label: 'Website Audit', icon: Search },
+      { id: 'keyword-research', label: 'Keyword Research', icon: TrendingUp },
+      { id: 'rank-tracker', label: 'Google Rank Tracking', icon: Target },
+      { id: 'on-page-seo', label: 'On-Page SEO', icon: Wand2 },
+      { id: 'technical-seo', label: 'Technical SEO', icon: Gauge },
+      { id: 'ai-recommendations', label: 'AI SEO Recommendations', icon: Sparkles },
+      { id: 'seo-reports', label: 'SEO Reports', icon: FileBarChart },
     ],
   },
   {
-    heading: 'Traffic & Revenue',
+    heading: 'SETTINGS',
     items: [
-      { id: 'visitor-tracking', label: 'Visitor Tracking', icon: Activity },
-      { id: 'leads', label: 'Leads', icon: Users },
-      { id: 'quotes', label: 'Quotes', icon: Receipt },
-      { id: 'orders', label: 'Orders', icon: ShoppingBag },
-      { id: 'sales-analytics', label: 'Sales Analytics', icon: BarChart3 },
-    ],
-  },
-  {
-    heading: 'Platform',
-    items: [
-      { id: 'integrations', label: 'Integrations', icon: Layers },
-      { id: 'profile', label: 'Profile & Settings', icon: Settings },
+      { id: 'websites', label: 'Website Management', icon: Globe },
+      { id: 'search-console', label: 'Google Search Console Integration', icon: LineChart },
+      { id: 'ga4-integration', label: 'Google Analytics 4 Integration', icon: PieChart },
+      { id: 'profile', label: 'Account Settings', icon: Settings },
     ],
   },
 ];
 
 const SECTION_TITLES: Record<NavSection, string> = {
-  dashboard: 'Executive & SEO Growth Dashboard',
-  websites: 'Websites',
-  'seo-analyzer': 'Complete SEO Site Audit',
-  'keyword-research': 'AI Keyword Strategy & Mapping',
-  'optimization-center': 'SEO Optimization Center',
-  'wordpress-woo': 'WordPress & WooCommerce Sync',
-  'search-console': 'Google Search Console',
-  'rank-tracker': 'Google Rank Tracker',
-  'technical-monitor': 'Technical & Core Web Vitals Monitor',
-  'content-studio': 'AI Content Studio',
-  'visitor-tracking': 'Visitor Tracking',
-  leads: 'Lead Management',
-  quotes: 'Quote Management',
-  orders: 'Order Management',
-  'sales-analytics': 'Sales Analytics',
-  integrations: 'Integrations',
-  profile: 'Profile & Settings',
+  dashboard: 'SEO Dashboard',
+  'website-audit': 'Website Audit',
+  'keyword-research': 'Keyword Research',
+  'rank-tracker': 'Google Rank Tracking',
+  'on-page-seo': 'On-Page SEO',
+  'technical-seo': 'Technical SEO',
+  'ai-recommendations': 'AI SEO Recommendations',
+  'seo-reports': 'SEO Reports',
+  websites: 'Website Management',
+  'search-console': 'Google Search Console Integration',
+  'ga4-integration': 'Google Analytics 4 Integration',
+  profile: 'Account Settings',
 };
 
 export function AppShell({
@@ -111,13 +87,13 @@ export function AppShell({
   onQuickAddWebsite,
   children,
 }: AppShellProps) {
-  const { user, profile, isDemoMode, logout, resendVerification, reloadUser, exitDemoMode } = useAuth();
+  const { user, profile, logout, resendVerification, reloadUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [resending, setResending] = useState(false);
 
-  const needsVerification = Boolean(user && !user.emailVerified && !isDemoMode);
+  const needsVerification = Boolean(user && !user.emailVerified);
 
   const handleResendVerification = async () => {
     setResending(true);
@@ -239,22 +215,6 @@ export function AppShell({
       </nav>
 
       <div className="border-t border-slate-200 p-3 space-y-2 dark:border-slate-800">
-        {isDemoMode && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs dark:border-amber-900/60 dark:bg-amber-950/30">
-            <p className="font-medium text-amber-800 dark:text-amber-300">Demo Mode Active</p>
-            <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400">
-              Sample data only. Sign in to run live crawls, AI, and APIs.
-            </p>
-            <button
-              type="button"
-              onClick={exitDemoMode}
-              className="mt-2 w-full rounded-md bg-amber-600 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-amber-700"
-            >
-              Sign In with Account
-            </button>
-          </div>
-        )}
-
         <div className="flex items-center justify-between gap-2 px-1">
           <button
             type="button"
@@ -272,7 +232,7 @@ export function AppShell({
             className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
           >
             <LogOut className="h-3.5 w-3.5" />
-            <span>{isDemoMode ? 'Exit' : 'Sign Out'}</span>
+            <span>Sign Out</span>
           </button>
         </div>
       </div>

@@ -107,7 +107,7 @@ export interface VerifiedKeywordMetric {
   dataSource: 'google_ads' | 'dataforseo';
 }
 
-const GOOGLE_ADS_REQUIRED_VARS = [
+const GOOGLE_ADS_OPTIONAL_VARS = [
   'GOOGLE_ADS_DEVELOPER_TOKEN',
   'GOOGLE_ADS_CLIENT_ID',
   'GOOGLE_ADS_CLIENT_SECRET',
@@ -115,16 +115,16 @@ const GOOGLE_ADS_REQUIRED_VARS = [
   'GOOGLE_ADS_CUSTOMER_ID',
 ] as const;
 
-const DATAFORSEO_REQUIRED_VARS = ['DATAFORSEO_LOGIN', 'DATAFORSEO_PASSWORD'] as const;
+const DATAFORSEO_OPTIONAL_VARS = ['DATAFORSEO_LOGIN', 'DATAFORSEO_PASSWORD'] as const;
 
 function missingVars(keys: readonly string[]): string[] {
   return keys.filter((k) => !process.env[k]?.trim());
 }
 
 export function getKeywordProvidersStatus(): KeywordProviderStatus[] {
-  const adsMissing = missingVars(GOOGLE_ADS_REQUIRED_VARS);
-  const dfsMissing = missingVars(DATAFORSEO_REQUIRED_VARS);
-  const serpMissing = missingVars(['SERP_API_KEY']);
+  const adsConfigured = missingVars(GOOGLE_ADS_OPTIONAL_VARS).length === 0;
+  const dfsConfigured = missingVars(DATAFORSEO_OPTIONAL_VARS).length === 0;
+  const serpConfigured = missingVars(['SERP_API_KEY']).length === 0;
 
   return [
     {
@@ -143,43 +143,40 @@ export function getKeywordProvidersStatus(): KeywordProviderStatus[] {
       capability: 'Verified impressions, clicks, CTR & ranking positions for your own verified domains',
       pricingTier: 'Free OAuth',
       missingEnvVars: [],
-      note: 'Connected per user via Google OAuth in the Search Console & Rank Tracker modules.',
+      note: 'Primary source for verified organic search performance via Google OAuth.',
     },
     {
       id: 'google_ads',
-      name: 'Google Ads Keyword Planner API',
-      connected: adsMissing.length === 0,
+      name: 'Google Ads Keyword Planner API (Optional)',
+      connected: adsConfigured,
       capability: 'Verified monthly Google search volume, competition index & historical CPC bids',
-      pricingTier: 'API free; requires Google Ads account + Standard Access',
-      missingEnvVars: adsMissing,
-      note:
-        adsMissing.length === 0
-          ? 'Configured on server. Live historical metrics will enrich keyword research automatically.'
-          : 'Not configured. Monthly search volume and CPC remain labeled Unavailable until configured.',
+      pricingTier: 'Optional Integration',
+      missingEnvVars: [],
+      note: adsConfigured
+        ? 'Optional integration active. Live historical search volume and CPC enrich keyword research automatically.'
+        : 'Optional integration (not active). Keyword research runs using Gemini AI and Google Search Console.',
     },
     {
       id: 'dataforseo',
-      name: 'DataForSEO / Google Ads Metrics API',
-      connected: dfsMissing.length === 0,
+      name: 'DataForSEO Metrics API (Optional)',
+      connected: dfsConfigured,
       capability: 'Live search volume, CPC & competition metrics across 200+ countries',
-      pricingTier: 'Paid Third-Party API (Pay-per-request)',
-      missingEnvVars: dfsMissing,
-      note:
-        dfsMissing.length === 0
-          ? 'Configured on server as verified volume & CPC provider.'
-          : 'Not configured. Add credentials on server to populate live third-party keyword metrics.',
+      pricingTier: 'Optional Paid Integration',
+      missingEnvVars: [],
+      note: dfsConfigured
+        ? 'Optional integration active. Live third-party search volume and CPC enrich keyword research automatically.'
+        : 'Optional integration (not active). Keyword research runs using Gemini AI and Google Search Console.',
     },
     {
       id: 'serp_api',
-      name: 'Authorized SERP Rank Tracker API',
-      connected: serpMissing.length === 0,
+      name: 'Authorized SERP Rank Tracker API (Optional)',
+      connected: serpConfigured,
       capability: 'External Google SERP position checking by country, language & device',
-      pricingTier: 'Paid Third-Party API (Serper / SerpAPI)',
-      missingEnvVars: serpMissing,
-      note:
-        serpMissing.length === 0
-          ? 'Configured on server for live external SERP checks.'
-          : 'Optional for rank tracking beyond your Search Console queries.',
+      pricingTier: 'Optional Integration (Serper / SerpAPI)',
+      missingEnvVars: [],
+      note: serpConfigured
+        ? 'Optional integration active for live external SERP checks.'
+        : 'Optional integration (not active). Google Search Console remains the primary source for verified organic rankings.',
     },
   ];
 }
@@ -370,7 +367,7 @@ export async function fetchVerifiedKeywordMetrics(
     return { provider: 'none', metrics: {}, notice: 'No candidate keywords provided.' };
   }
 
-  if (missingVars(GOOGLE_ADS_REQUIRED_VARS).length === 0) {
+  if (missingVars(GOOGLE_ADS_OPTIONAL_VARS).length === 0) {
     try {
       const metrics = await fetchGoogleAdsHistoricalMetrics(uniqueKeywords, countryCode, languageCode);
       return {
@@ -383,25 +380,25 @@ export async function fetchVerifiedKeywordMetrics(
       return {
         provider: 'none',
         metrics: {},
-        notice: `Google Ads API unavailable (${reason}). Numeric volume & CPC shown as Unavailable.`,
+        notice: `Optional Google Ads lookup unavailable (${reason}). Numeric volume & CPC metrics are hidden.`,
       };
     }
   }
 
-  if (missingVars(DATAFORSEO_REQUIRED_VARS).length === 0) {
+  if (missingVars(DATAFORSEO_OPTIONAL_VARS).length === 0) {
     try {
       const metrics = await fetchDataForSeoMetrics(uniqueKeywords, countryCode, languageCode);
       return {
         provider: 'dataforseo',
         metrics,
-        notice: 'Monthly search volume & CPC retrieved live from DataForSEO Google Ads API.',
+        notice: 'Monthly search volume & CPC retrieved live from DataForSEO API.',
       };
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'DataForSEO lookup failed';
       return {
         provider: 'none',
         metrics: {},
-        notice: `DataForSEO unavailable (${reason}). Numeric volume & CPC shown as Unavailable.`,
+        notice: `Optional DataForSEO lookup unavailable (${reason}). Numeric volume & CPC metrics are hidden.`,
       };
     }
   }
@@ -410,6 +407,6 @@ export async function fetchVerifiedKeywordMetrics(
     provider: 'none',
     metrics: {},
     notice:
-      'No verified keyword volume API (Google Ads Keyword Planner or DataForSEO) is configured on the server. Search Volume, CPC, and verified Keyword Difficulty are marked Unavailable rather than fabricated.',
+      'Keyword ideas, search intent, and clusters are powered by Gemini AI. Connect Google Search Console for verified organic search performance.',
   };
 }

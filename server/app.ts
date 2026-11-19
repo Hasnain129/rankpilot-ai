@@ -121,10 +121,8 @@ function isoDateDaysAgo(days: number): string {
 export function createApp() {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
-  app.use(express.text({ type: 'text/plain', limit: '64kb' }));
 
   const aiLimiter = createRateLimiter(25, 60_000);
-  const trackLimiter = createRateLimiter(120, 60_000);
 
   // ---------------------------------------------------------------------------
   // 0. Health Endpoint (public, zero secrets)
@@ -244,7 +242,10 @@ export function createApp() {
           : { severity: 'warning', category: 'Technical SEO', title: 'Missing canonical link tag', detail: 'Set a rel="canonical" link to prevent duplicate URL indexing.' }
       );
       if (p.noindex) {
-        issues.push({ severity: 'critical', category: 'Indexing', title: 'Meta robots noindex present', detail: 'Search engines are instructed not to index this URL.' });
+        issues.push({ severity: 'critical', category: 'Indexing', title: 'Robots noindex directive detected', detail: p.xRobotsTag ? `Blocked via meta/header (${p.metaRobots || p.xRobotsTag}).` : 'Search engines are instructed not to index this URL.' });
+      }
+      if (p.redirectCount > 0) {
+        issues.push({ severity: 'warning', category: 'Technical SEO', title: `${p.redirectCount} HTTP redirect hop(s) before final URL`, detail: `Redirect chain: ${p.redirectChain.join(' -> ')}` });
       }
       if (p.schemaTypes.length > 0) {
         issues.push({ severity: 'passed', category: 'Structured Data', title: `JSON-LD Schema (${p.schemaTypes.join(', ')})`, detail: 'Structured data found on page.' });
@@ -345,6 +346,10 @@ Provide a concise executive summary (max 2 sentences) and 4-6 specific actionabl
         hasCanonical: p.hasCanonical,
         hasOpenGraph: true,
         mobileFriendly: p.mobileFriendly,
+        redirectChain: p.redirectChain,
+        redirectCount: p.redirectCount,
+        metaRobots: p.metaRobots,
+        xRobotsTag: p.xRobotsTag,
         issues: issues.slice(0, 30),
         recommendations: recommendations.slice(0, 20),
         summary,
@@ -1280,88 +1285,6 @@ Requirements:
   });
 
   // ---------------------------------------------------------------------------
-  // 6. Gemini AI Content Studio (Protected)
-  // ---------------------------------------------------------------------------
-  app.post('/api/ai/content', requireFirebaseAuth, aiLimiter, async (req, res) => {
-    try {
-      const {
-        contentType,
-        topic,
-        targetKeyword = '',
-        tone = 'Authoritative & Clear',
-        audience = 'B2B Decision Makers',
-        websiteName = '',
-      } = req.body as {
-        contentType?: string;
-        topic?: string;
-        targetKeyword?: string;
-        tone?: string;
-        audience?: string;
-        websiteName?: string;
-      };
-
-      if (!topic || typeof topic !== 'string' || topic.trim().length < 2 || topic.trim().length > 2000) {
-        res.status(400).json({ error: 'Please provide a topic or product description prompt (2–2000 chars).' });
-        return;
-      }
-
-      const ai = getGeminiClient();
-      const formatMap: Record<string, string> = {
-        blog: 'a comprehensive, well-structured SEO blog article in Markdown with H2/H3 subheadings, actionable sections, and a concise conclusion',
-        meta_title: '5 optimized SEO meta title variations (each 50-60 characters) with rationale',
-        meta_description: '5 high-CTR SEO meta description variations (each 135-155 characters) with rationale',
-        product_description: 'a persuasive, benefit-focused product/service description with scannable bullet features and conversion CTA',
-        landing_page: 'conversion-oriented landing page copy including Hero Headline, Subheadline, Value Pillars, Social Proof Prompts, and CTA section',
-        faq: '6 structured SEO-ready Frequently Asked Questions with crisp, direct answers suitable for FAQ schema',
-      };
-
-      if (contentType && !formatMap[contentType]) {
-        res.status(400).json({ error: `Unsupported contentType. Allowed values: ${Object.keys(formatMap).join(', ')}.` });
-        return;
-      }
-
-      const response = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: `Write ${formatMap[contentType || 'blog']}.
-Topic / Product: ${topic.trim()}
-Target Primary Keyword: ${String(targetKeyword || topic).trim().slice(0, 160)}
-Tone: ${String(tone).slice(0, 80)}
-Target Audience: ${String(audience).slice(0, 120)}
-${websiteName ? `Brand / Website: ${String(websiteName).slice(0, 120)}` : ''}
-
-Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under 155 chars), and the full body text.`,
-          config: {
-            systemInstruction: 'You are an expert B2B SEO copywriter. Produce original, high-converting, human-sounding copy without fluff.',
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                metaTitle: { type: Type.STRING },
-                metaDescription: { type: Type.STRING },
-                body: { type: Type.STRING },
-              },
-              required: ['title', 'metaTitle', 'metaDescription', 'body'],
-            },
-          },
-        })
-      );
-
-      const parsed = JSON.parse(response.text || '{}');
-      res.json({
-        title: String(parsed.title || topic).slice(0, 240),
-        metaTitle: String(parsed.metaTitle || '').slice(0, 160),
-        metaDescription: String(parsed.metaDescription || '').slice(0, 320),
-        body: String(parsed.body || '').slice(0, 24000),
-      });
-    } catch (err) {
-      const { status, message } = extractGeminiError(err);
-      res.status(status).json({ error: message });
-    }
-  });
-
-  // ---------------------------------------------------------------------------
   // 7. Phase 4: WordPress & WooCommerce Secure REST Integration
   // ---------------------------------------------------------------------------
   app.post('/api/wordpress/connect', requireFirebaseAuth, aiLimiter, async (req, res) => {
@@ -1858,10 +1781,12 @@ Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under
         }>;
       };
 
-      const [dailyRows, queryRows, pageRows, prevSummaryRows, prevPageRows] = await Promise.all([
+      const [dailyRows, queryRows, pageRows, countryRows, deviceRows, prevSummaryRows, prevPageRows] = await Promise.all([
         queryGsc({ startDate, endDate, dimensions: ['date'], rowLimit: 90 }),
         queryGsc({ startDate, endDate, dimensions: ['query'], rowLimit: 40 }),
         queryGsc({ startDate, endDate, dimensions: ['page'], rowLimit: 40 }),
+        queryGsc({ startDate, endDate, dimensions: ['country'], rowLimit: 25 }),
+        queryGsc({ startDate, endDate, dimensions: ['device'], rowLimit: 10 }),
         queryGsc({ startDate: prevStartDate, endDate: prevEndDate, dimensions: ['date'], rowLimit: 90 }),
         queryGsc({ startDate: prevStartDate, endDate: prevEndDate, dimensions: ['page'], rowLimit: 40 }),
       ]);
@@ -1918,6 +1843,22 @@ Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under
         };
       });
 
+      const topCountries = countryRows.slice(0, 25).map((r) => ({
+        country: String(r.keys?.[0] || '').toUpperCase(),
+        clicks: Math.trunc(r.clicks || 0),
+        impressions: Math.trunc(r.impressions || 0),
+        ctr: Number(((r.ctr || 0) * 100).toFixed(2)),
+        position: Number((r.position || 0).toFixed(1)),
+      }));
+
+      const topDevices = deviceRows.slice(0, 10).map((r) => ({
+        device: String(r.keys?.[0] || '').toUpperCase(),
+        clicks: Math.trunc(r.clicks || 0),
+        impressions: Math.trunc(r.impressions || 0),
+        ctr: Number(((r.ctr || 0) * 100).toFixed(2)),
+        position: Number((r.position || 0).toFixed(1)),
+      }));
+
       const auth = req.firebaseAuth!;
       const snapshotId = makeDocId('gsc');
       const snapshotPayload = {
@@ -1935,6 +1876,8 @@ Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under
         dailySeries,
         topQueries,
         topPages,
+        topCountries,
+        topDevices,
       };
 
       await fsCreateDoc(auth.idToken, 'gscSnapshots', snapshotId, snapshotPayload, ['createdAt']);
@@ -2364,244 +2307,348 @@ Return a clean title, SEO metaTitle (under 60 chars), SEO metaDescription (under
   });
 
   // ---------------------------------------------------------------------------
-  // 11. Lightweight Website Visitor Tracking Script (/track.js) — PUBLIC
+  // 13. Google Analytics 4 Live OAuth Integration (/api/ga4/*)
   // ---------------------------------------------------------------------------
-  app.get('/track.js', (req, res) => {
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-    const host = req.headers['x-forwarded-host'] || req.get('host');
-    const endpoint = `${protocol}://${host}/api/track`;
-
-    const script = `(function(w, d) {
-  if (w.rankpilot && w.rankpilot._initialized) return;
-  var scriptEl = d.currentScript || d.querySelector('script[data-tracking-id]');
-  var trackingId = (scriptEl && scriptEl.getAttribute('data-tracking-id')) || w.RANKPILOT_TRACKING_ID || '';
-  if (!trackingId) return;
-
-  var SESSION_TTL_MS = 30 * 60 * 1000;
-
-  function genId(prefix) {
-    return prefix + '_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  }
-
-  function getVisitorId() {
+  app.post('/api/ga4/properties', requireFirebaseAuth, aiLimiter, async (req, res) => {
     try {
-      var vid = w.localStorage.getItem('rp_vid');
-      if (!vid) { vid = genId('v'); w.localStorage.setItem('rp_vid', vid); }
-      return vid;
-    } catch (e) {
-      var match = d.cookie.match(/(?:^|; )rp_vid=([^;]+)/);
-      if (match) return decodeURIComponent(match[1]);
-      var fallback = genId('v');
-      d.cookie = 'rp_vid=' + encodeURIComponent(fallback) + '; path=/; max-age=31536000; SameSite=Lax';
-      return fallback;
-    }
-  }
-
-  function getSessionId() {
-    try {
-      var now = Date.now();
-      var raw = w.sessionStorage.getItem('rp_session');
-      if (raw) {
-        var parsed = JSON.parse(raw);
-        if (parsed && parsed.id && (now - parsed.ts) < SESSION_TTL_MS) {
-          w.sessionStorage.setItem('rp_session', JSON.stringify({ id: parsed.id, ts: now }));
-          return parsed.id;
-        }
+      const gaToken = String(req.headers['x-google-access-token'] || '').trim();
+      if (!gaToken) {
+        res.status(401).json({ error: 'Google Analytics 4 OAuth access token is required.' });
+        return;
       }
-      var sid = genId('s');
-      w.sessionStorage.setItem('rp_session', JSON.stringify({ id: sid, ts: now }));
-      return sid;
-    } catch (e) { return genId('s'); }
-  }
-
-  function getDeviceType() {
-    var ua = navigator.userAgent || '';
-    if (/tablet|ipad|playbook|silk/i.test(ua)) return 'tablet';
-    if (/mobile|iphone|ipod|android|blackberry|opera mini|iemobile/i.test(ua)) return 'mobile';
-    return 'desktop';
-  }
-
-  function inferSource(utmSource, ref) {
-    if (utmSource) return utmSource;
-    if (!ref) return 'Direct';
-    try {
-      var h = new URL(ref).hostname.toLowerCase();
-      if (h === w.location.hostname.toLowerCase()) return 'Direct';
-      if (/google\\.|bing\\.|duckduckgo\\.|yahoo\\.|ecosia\\./.test(h)) return 'Organic Search';
-      if (/facebook\\.|instagram\\.|linkedin\\.|twitter\\.|x\\.com|tiktok\\./.test(h)) return 'Social';
-      return 'Referral';
-    } catch (e) { return 'Direct'; }
-  }
-
-  function send(eventType, value, customPath) {
-    var params = new URLSearchParams(w.location.search || '');
-    var utmSource = params.get('utm_source') || '';
-    var utmMedium = params.get('utm_medium') || '';
-    var utmCampaign = params.get('utm_campaign') || '';
-    var ref = d.referrer || '';
-    var payload = JSON.stringify({
-      trackingId: trackingId,
-      visitorId: getVisitorId(),
-      sessionId: getSessionId(),
-      eventType: eventType || 'pageview',
-      path: customPath || (w.location.pathname + w.location.search) || '/',
-      referrer: ref.slice(0, 500),
-      trafficSource: inferSource(utmSource, ref),
-      utmSource: utmSource.slice(0, 120),
-      utmMedium: utmMedium.slice(0, 120),
-      utmCampaign: utmCampaign.slice(0, 120),
-      deviceType: getDeviceType(),
-      conversionValue: typeof value === 'number' && value >= 0 ? value : 0
-    });
-
-    if (typeof fetch === 'function') {
-      fetch('${endpoint}', {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: payload,
-        keepalive: true,
-        mode: 'cors'
-      }).catch(function() {
-        if (navigator.sendBeacon) {
-          navigator.sendBeacon('${endpoint}', new Blob([payload], { type: 'text/plain;charset=UTF-8' }));
-        }
+      const gaRes = await fetch('https://analyticsadmin.googleapis.com/v1beta/accountSummaries', {
+        headers: { Authorization: `Bearer ${gaToken}` },
       });
-    } else if (navigator.sendBeacon) {
-      navigator.sendBeacon('${endpoint}', new Blob([payload], { type: 'text/plain;charset=UTF-8' }));
-    }
-  }
-
-  w.rankpilot = {
-    _initialized: true,
-    trackPageview: function(path) { send('pageview', 0, path); },
-    trackConversion: function(type, value) {
-      var allowed = ['conversion', 'lead_submit', 'quote_request'];
-      var ev = allowed.indexOf(type) !== -1 ? type : 'conversion';
-      send(ev, Number(value) || 0);
-    }
-  };
-
-  send('pageview', 0);
-})(window, document);`;
-
-    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.setHeader('Cache-Control', 'public, max-age=300');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(script);
-  });
-
-  // ---------------------------------------------------------------------------
-  // 12. Public Visitor Tracking Event Ingestion (/api/track) — PUBLIC
-  // ---------------------------------------------------------------------------
-  app.options('/api/track', (_req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.status(204).end();
-  });
-
-  app.post('/api/track', trackLimiter, async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    try {
-      let body: Record<string, unknown> = {};
-      if (typeof req.body === 'string') {
-        try {
-          body = JSON.parse(req.body);
-        } catch {
-          res.status(400).json({ error: 'Malformed JSON tracking payload.' });
-          return;
+      const data = await gaRes.json();
+      if (!gaRes.ok) {
+        res.status(gaRes.status).json({
+          error: data?.error?.message || `Google Analytics Admin API error (${gaRes.status}).`,
+        });
+        return;
+      }
+      const properties: Array<{ propertyId: string; displayName: string; accountName: string }> = [];
+      for (const acct of (data.accountSummaries || []) as Array<{
+        displayName?: string;
+        propertySummaries?: Array<{ property?: string; displayName?: string }>;
+      }>) {
+        for (const prop of acct.propertySummaries || []) {
+          if (prop.property) {
+            properties.push({
+              propertyId: prop.property,
+              displayName: prop.displayName || prop.property,
+              accountName: acct.displayName || 'GA4 Account',
+            });
+          }
         }
-      } else if (req.body && typeof req.body === 'object') {
-        body = req.body as Record<string, unknown>;
       }
+      res.json({ properties });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed loading GA4 properties.' });
+    }
+  });
 
-      const trackingId = String(body.trackingId || '').trim();
-      if (!/^[a-zA-Z0-9_-]{6,64}$/.test(trackingId)) {
-        res.status(400).json({ error: 'Invalid trackingId format.' });
+  app.post('/api/ga4/report', requireFirebaseAuth, aiLimiter, async (req, res) => {
+    try {
+      const gaToken = String(req.headers['x-google-access-token'] || '').trim();
+      if (!gaToken) {
+        res.status(401).json({ error: 'Connect Google Analytics 4 OAuth first.' });
+        return;
+      }
+      const { websiteId, propertyId, days = 28 } = req.body as {
+        websiteId?: string;
+        propertyId?: string;
+        days?: number;
+      };
+      if (!websiteId || !propertyId) {
+        res.status(400).json({ error: 'websiteId and propertyId are required.' });
         return;
       }
 
-      const cfg = getFirebaseConfig();
-      const baseUrl = `https://firestore.googleapis.com/v1/projects/${cfg.projectId}/databases/${cfg.firestoreDatabaseId}/documents`;
+      const normalizedProp = propertyId.startsWith('properties/') ? propertyId : `properties/${propertyId}`;
+      const periodDays = Math.max(7, Math.min(90, Number(days) || 28));
+      const endDate = isoDateDaysAgo(0);
+      const startDate = isoDateDaysAgo(periodDays - 1);
 
-      const keyRes = await fetch(
-        `${baseUrl}/trackingKeys/${encodeURIComponent(trackingId)}?key=${encodeURIComponent(cfg.apiKey)}`
-      );
-      if (!keyRes.ok) {
-        res.status(404).json({ error: 'Tracking ID not registered.' });
-        return;
-      }
-      const keyDoc = await keyRes.json();
-      const ownerId = keyDoc?.fields?.ownerId?.stringValue;
-      const websiteId = keyDoc?.fields?.websiteId?.stringValue;
-      if (!ownerId || !websiteId) {
-        res.status(404).json({ error: 'Invalid tracking key record.' });
-        return;
-      }
+      const runGaReport = async (body: Record<string, unknown>) => {
+        const r = await fetch(`https://analyticsdata.googleapis.com/v1beta/${normalizedProp}:runReport`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${gaToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        const json = await r.json();
+        if (!r.ok) {
+          throw new Error(json?.error?.message || `GA4 Data API returned HTTP ${r.status}.`);
+        }
+        return (json.rows || []) as Array<{
+          dimensionValues?: Array<{ value?: string }>;
+          metricValues?: Array<{ value?: string }>;
+        }>;
+      };
 
-      const allowedEventTypes = ['pageview', 'conversion', 'lead_submit', 'quote_request'];
-      const eventType = allowedEventTypes.includes(String(body.eventType))
-        ? String(body.eventType)
-        : 'pageview';
-      const allowedDevices = ['desktop', 'mobile', 'tablet'];
-      const deviceType = allowedDevices.includes(String(body.deviceType))
-        ? String(body.deviceType)
-        : 'desktop';
-      const conversionValue =
-        Number.isFinite(Number(body.conversionValue)) && Number(body.conversionValue) >= 0
-          ? Math.min(10000000, Number(body.conversionValue))
-          : 0;
-
-      const visitorId = String(body.visitorId || '').trim().slice(0, 128) || 'v_anon';
-      const sessionId = String(body.sessionId || '').trim().slice(0, 128) || 's_anon';
-      const reqPath = String(body.path || '/').trim().slice(0, 500) || '/';
-      const trafficSource = String(body.trafficSource || 'Direct').trim().slice(0, 80) || 'Direct';
-
-      const eventId = `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-      const docPath = `projects/${cfg.projectId}/databases/${cfg.firestoreDatabaseId}/documents/visitorEvents/${eventId}`;
-
-      const commitRes = await fetch(`${baseUrl}:commit?key=${encodeURIComponent(cfg.apiKey)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          writes: [
-            {
-              update: {
-                name: docPath,
-                fields: {
-                  ownerId: { stringValue: ownerId },
-                  websiteId: { stringValue: websiteId },
-                  trackingId: { stringValue: trackingId },
-                  visitorId: { stringValue: visitorId },
-                  sessionId: { stringValue: sessionId },
-                  eventType: { stringValue: eventType },
-                  path: { stringValue: reqPath },
-                  referrer: { stringValue: String(body.referrer || '').slice(0, 500) },
-                  trafficSource: { stringValue: trafficSource },
-                  utmSource: { stringValue: String(body.utmSource || '').slice(0, 120) },
-                  utmMedium: { stringValue: String(body.utmMedium || '').slice(0, 120) },
-                  utmCampaign: { stringValue: String(body.utmCampaign || '').slice(0, 120) },
-                  deviceType: { stringValue: deviceType },
-                  conversionValue: { doubleValue: conversionValue },
-                },
-              },
-              updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-            },
+      const dateRanges = [{ startDate, endDate }];
+      const [summaryRows, sourceRows, landingRows, campaignRows, dailyRows] = await Promise.all([
+        runGaReport({
+          dateRanges,
+          metrics: [
+            { name: 'totalUsers' },
+            { name: 'newUsers' },
+            { name: 'sessions' },
+            { name: 'conversions' },
+            { name: 'purchaseRevenue' },
           ],
         }),
+        runGaReport({
+          dateRanges,
+          dimensions: [{ name: 'sessionDefaultChannelGroup' }],
+          metrics: [{ name: 'sessions' }, { name: 'totalUsers' }, { name: 'conversions' }],
+          limit: 20,
+        }),
+        runGaReport({
+          dateRanges,
+          dimensions: [{ name: 'landingPagePlusQueryString' }],
+          metrics: [{ name: 'sessions' }, { name: 'totalUsers' }, { name: 'conversions' }, { name: 'purchaseRevenue' }],
+          limit: 25,
+        }),
+        runGaReport({
+          dateRanges,
+          dimensions: [{ name: 'sessionCampaignName' }, { name: 'sessionSourceMedium' }],
+          metrics: [{ name: 'sessions' }, { name: 'conversions' }, { name: 'purchaseRevenue' }],
+          limit: 25,
+        }),
+        runGaReport({
+          dateRanges,
+          dimensions: [{ name: 'date' }],
+          metrics: [{ name: 'sessions' }, { name: 'conversions' }, { name: 'purchaseRevenue' }],
+          orderBys: [{ dimension: { dimensionName: 'date' } }],
+          limit: 90,
+        }),
+      ]);
+
+      const numVal = (row: { metricValues?: Array<{ value?: string }> } | undefined, idx: number) =>
+        Number(row?.metricValues?.[idx]?.value || 0);
+
+      const s0 = summaryRows[0];
+      const totalUsers = Math.trunc(numVal(s0, 0));
+      const newUsers = Math.trunc(numVal(s0, 1));
+      const returningUsers = Math.max(0, totalUsers - newUsers);
+      const sessions = Math.trunc(numVal(s0, 2));
+      const conversions = Math.trunc(numVal(s0, 3));
+      const purchaseRevenue = Number(numVal(s0, 4).toFixed(2));
+      const conversionRate = sessions > 0 ? Number(((conversions / sessions) * 100).toFixed(2)) : 0;
+
+      const trafficSources = sourceRows.slice(0, 30).map((r) => ({
+        channel: String(r.dimensionValues?.[0]?.value || 'Unassigned').slice(0, 80),
+        sessions: Math.trunc(numVal(r, 0)),
+        users: Math.trunc(numVal(r, 1)),
+        conversions: Math.trunc(numVal(r, 2)),
+      }));
+
+      const sumChannel = (kw: string) =>
+        trafficSources
+          .filter((s) => s.channel.toLowerCase().includes(kw))
+          .reduce((acc, s) => acc + s.sessions, 0);
+
+      const organicSessions = sumChannel('organic');
+      const directSessions = sumChannel('direct');
+      const referralSessions = sumChannel('referral');
+      const campaignSessions = campaignRows
+        .filter((r) => {
+          const c = (r.dimensionValues?.[0]?.value || '').toLowerCase();
+          return c && c !== '(not set)' && c !== '(direct)' && c !== '(organic)';
+        })
+        .reduce((acc, r) => acc + Math.trunc(numVal(r, 0)), 0);
+
+      const topLandingPages = landingRows.slice(0, 40).map((r) => ({
+        page: String(r.dimensionValues?.[0]?.value || '/').slice(0, 300),
+        sessions: Math.trunc(numVal(r, 0)),
+        users: Math.trunc(numVal(r, 1)),
+        conversions: Math.trunc(numVal(r, 2)),
+        revenue: Number(numVal(r, 3).toFixed(2)),
+      }));
+
+      const campaignPerformance = campaignRows.slice(0, 40).map((r) => ({
+        campaign: String(r.dimensionValues?.[0]?.value || '(not set)').slice(0, 120),
+        sourceMedium: String(r.dimensionValues?.[1]?.value || '(direct) / (none)').slice(0, 120),
+        sessions: Math.trunc(numVal(r, 0)),
+        conversions: Math.trunc(numVal(r, 1)),
+        revenue: Number(numVal(r, 2).toFixed(2)),
+      }));
+
+      const dailySeries = dailyRows.slice(0, 90).map((r) => {
+        const rawDate = String(r.dimensionValues?.[0]?.value || '');
+        const isoDate =
+          rawDate.length === 8
+            ? `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`
+            : rawDate;
+        return {
+          date: isoDate,
+          sessions: Math.trunc(numVal(r, 0)),
+          conversions: Math.trunc(numVal(r, 1)),
+          revenue: Number(numVal(r, 2).toFixed(2)),
+        };
       });
 
-      if (!commitRes.ok) {
-        const errText = await commitRes.text();
-        console.error('Firestore REST commit failed:', errText);
-        res.status(502).json({ error: 'Failed to persist tracking event.' });
+      const auth = req.firebaseAuth!;
+      const snapId = makeDocId('ga4');
+      const snapPayload = {
+        ownerId: auth.uid,
+        websiteId,
+        propertyId: normalizedProp.slice(0, 128),
+        dateRangeStart: startDate,
+        dateRangeEnd: endDate,
+        totalUsers,
+        newUsers,
+        returningUsers,
+        sessions,
+        organicSessions,
+        directSessions,
+        referralSessions,
+        campaignSessions,
+        conversions,
+        conversionRate,
+        purchaseRevenue,
+        hasVerifiedRevenue: purchaseRevenue > 0,
+        trafficSources,
+        topLandingPages,
+        campaignPerformance,
+        dailySeries,
+      };
+
+      await fsCreateDoc(auth.idToken, 'analyticsSnapshots', snapId, snapPayload, ['createdAt']);
+      await fsWriteSyncLog(auth, {
+        websiteId,
+        channel: 'ga4',
+        action: `Sync GA4 report (${periodDays}d)`,
+        status: 'success',
+        detail: `${normalizedProp}: ${sessions} sessions, ${totalUsers} users, ${conversions} conversions.`,
+      });
+
+      res.json({ id: snapId, ...snapPayload });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Google Analytics 4 sync failed.',
+      });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // 14. AI SEO Recommendations Generator (/api/ai/recommendations)
+  // ---------------------------------------------------------------------------
+  app.post('/api/ai/recommendations', requireFirebaseAuth, aiLimiter, async (req, res) => {
+    try {
+      const { websiteId, domain, contextSummary } = req.body as {
+        websiteId?: string;
+        domain?: string;
+        contextSummary?: string;
+      };
+      if (!websiteId || !domain) {
+        res.status(400).json({ error: 'websiteId and domain are required.' });
         return;
       }
 
-      res.status(201).json({ ok: true, eventId });
+      const ai = getGeminiClient();
+      const response = await callGeminiWithRetry(() =>
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: `Analyze all available SEO telemetry for website ${String(domain).slice(0, 200)} and synthesize 6 to 8 prioritized, high-leverage SEO action items.
+
+REAL WORKSPACE TELEMETRY:
+${String(contextSummary || 'No prior audit data supplied; analyze core site fundamentals.').slice(0, 12000)}
+
+Rules:
+- Each recommendation must belong to category: "technical" | "on_page" | "keyword" | "content" | "internal_linking"
+- Priority must be strictly: "Critical" | "High" | "Medium" | "Low"
+- Clearly ground sourceBasis in the metrics actually supplied above (e.g. "Site Crawl Audit", "GSC Performance", "PageSpeed CWV", "GA4 Performance", "Keyword Research").
+- Provide crystal-clear, actionable steps specifying exact affected URLs/paths where known.`,
+          config: {
+            systemInstruction:
+              'You are a Principal SEO Growth Architect. Convert verified crawl, Search Console, GA4, and PageSpeed signals into concrete engineering and content action items without hallucinating unseen numbers.',
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                recommendations: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      category: { type: Type.STRING },
+                      priority: { type: Type.STRING },
+                      affectedPage: { type: Type.STRING },
+                      whatIsWrong: { type: Type.STRING },
+                      whyItMatters: { type: Type.STRING },
+                      howToFix: { type: Type.STRING },
+                      expectedBenefit: { type: Type.STRING },
+                      sourceBasis: { type: Type.STRING },
+                    },
+                    required: [
+                      'category',
+                      'priority',
+                      'affectedPage',
+                      'whatIsWrong',
+                      'whyItMatters',
+                      'howToFix',
+                      'expectedBenefit',
+                      'sourceBasis',
+                    ],
+                  },
+                },
+              },
+              required: ['recommendations'],
+            },
+          },
+        })
+      );
+
+      const parsed = JSON.parse(response.text || '{}');
+      const allowedCats = new Set(['technical', 'on_page', 'keyword', 'content', 'internal_linking']);
+      const allowedPri = new Set(['Critical', 'High', 'Medium', 'Low']);
+
+      const rawList = Array.isArray(parsed.recommendations) ? parsed.recommendations.slice(0, 10) : [];
+      const auth = req.firebaseAuth!;
+      const createdIds: string[] = [];
+
+      for (const item of rawList) {
+        const recId = makeDocId('rec');
+        const category = allowedCats.has(String(item.category)) ? String(item.category) : 'on_page';
+        const priority = allowedPri.has(String(item.priority)) ? String(item.priority) : 'High';
+        await fsCreateDoc(
+          auth.idToken,
+          'seoRecommendations',
+          recId,
+          {
+            ownerId: auth.uid,
+            websiteId,
+            category,
+            priority,
+            status: 'open',
+            affectedPage: String(item.affectedPage || domain).slice(0, 480) || domain,
+            whatIsWrong: String(item.whatIsWrong || 'SEO optimization opportunity identified').slice(0, 950),
+            whyItMatters: String(item.whyItMatters || 'Improves organic search visibility and relevance.').slice(0, 950),
+            howToFix: String(item.howToFix || 'Review affected page and apply updated metadata or structure.').slice(0, 1900),
+            expectedBenefit: String(item.expectedBenefit || 'Higher organic click-through and crawl efficiency.').slice(0, 950),
+            sourceBasis: String(item.sourceBasis || 'Workspace Telemetry').slice(0, 480),
+          },
+          ['createdAt', 'updatedAt']
+        );
+        createdIds.push(recId);
+      }
+
+      await fsWriteSyncLog(auth, {
+        websiteId,
+        channel: 'recommendations',
+        action: `Generated ${createdIds.length} AI SEO action(s)`,
+        status: 'success',
+        detail: `Synthesized prioritized recommendations for ${domain} across technical, on-page, and keyword signals.`,
+      });
+
+      res.json({ createdCount: createdIds.length, createdIds });
     } catch (err) {
-      console.error('Track ingest error:', err);
-      res.status(500).json({ error: 'Tracking ingestion error.' });
+      const { status, message } = extractGeminiError(err);
+      res.status(status).json({ error: message });
     }
   });
 

@@ -34,13 +34,15 @@ interface AuthContextValue {
   user: User | null;
   profile: UserProfile | null;
   authReady: boolean;
-  isDemoMode: boolean;
   firestoreConnected: boolean;
   gscAccessToken: string | null;
+  ga4AccessToken: string | null;
   authRedirectError: FormattedAuthError | null;
   clearAuthRedirectError: () => void;
   connectGoogleSearchConsole: () => Promise<string>;
   clearGscToken: () => void;
+  connectGoogleAnalytics4: () => Promise<string>;
+  clearGa4Token: () => void;
   signInWithGoogle: () => Promise<void>;
   signInWithGoogleRedirect: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
@@ -50,8 +52,6 @@ interface AuthContextValue {
   reloadUser: () => Promise<boolean>;
   updateUserProfile: (displayName: string, companyName: string) => Promise<void>;
   logout: () => Promise<void>;
-  enterDemoMode: () => void;
-  exitDemoMode: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -128,10 +128,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [, setUserRefreshTick] = useState(0);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [isDemoMode, setIsDemoMode] = useState(false);
   const [firestoreConnected, setFirestoreConnected] = useState(true);
   // Stored strictly in memory (never localStorage/sessionStorage)
   const [gscAccessToken, setGscAccessToken] = useState<string | null>(null);
+  const [ga4AccessToken, setGa4AccessToken] = useState<string | null>(null);
   const [authRedirectError, setAuthRedirectError] = useState<FormattedAuthError | null>(null);
 
   useEffect(() => {
@@ -142,10 +142,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (result) {
           const cred = GoogleAuthProvider.credentialFromResult(result);
           if (cred?.accessToken) {
-            // Preserve token in memory if GSC scope was consented via redirect
             setGscAccessToken(cred.accessToken);
           }
-          setIsDemoMode(false);
         }
       })
       .catch((err) => {
@@ -155,7 +153,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
-        setIsDemoMode(false);
         const profilePath = `users/${firebaseUser.uid}`;
         try {
           const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
@@ -192,6 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         setProfile(null);
         setGscAccessToken(null);
+        setGa4AccessToken(null);
       }
       setAuthReady(true);
     });
@@ -229,14 +227,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearGscToken = () => setGscAccessToken(null);
 
+  const connectGoogleAnalytics4 = async (): Promise<string> => {
+    if (!auth.currentUser) {
+      throw new Error('Sign in with RankPilot first before connecting Google Analytics 4.');
+    }
+    const ga4Provider = new GoogleAuthProvider();
+    ga4Provider.addScope('https://www.googleapis.com/auth/analytics.readonly');
+    ga4Provider.setCustomParameters({ prompt: 'consent select_account' });
+    try {
+      const hasGoogleLinked = auth.currentUser.providerData.some(
+        (p) => p.providerId === 'google.com'
+      );
+      const result = hasGoogleLinked
+        ? await reauthenticateWithPopup(auth.currentUser, ga4Provider)
+        : await signInWithPopup(auth, ga4Provider);
+      const cred = GoogleAuthProvider.credentialFromResult(result);
+      const token = cred?.accessToken;
+      if (!token) {
+        throw new Error(
+          'Google OAuth did not return an Analytics access token. Ensure Google Analytics read-only consent was granted.'
+        );
+      }
+      setGa4AccessToken(token);
+      return token;
+    } catch (err) {
+      throw formatAuthError(err);
+    }
+  };
+
+  const clearGa4Token = () => setGa4AccessToken(null);
+
   const signInWithGoogle = async () => {
     setAuthRedirectError(null);
     try {
       await signInWithPopup(auth, googleProvider);
-      setIsDemoMode(false);
     } catch (err) {
       const formatted = formatAuthError(err);
-      // On standalone top-level deployments (e.g. mobile / Vercel with strict popup blocking), fall back cleanly to redirect
       if (
         formatted.code === 'auth/popup-blocked' &&
         typeof window !== 'undefined' &&
@@ -261,7 +287,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signInWithEmail = async (email: string, password: string) => {
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
-      setIsDemoMode(false);
     } catch (err) {
       throw formatAuthError(err);
     }
@@ -289,7 +314,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       await sendEmailVerification(cred.user).catch(() => {});
       setProfile(newProfile);
-      setIsDemoMode(false);
     } catch (err) {
       throw formatAuthError(err);
     }
@@ -317,18 +341,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateUserProfile = async (displayName: string, companyName: string) => {
-    if (isDemoMode) {
-      setProfile((prev) => ({
-        uid: 'demo_user',
-        email: 'demo@rankpilot.app',
-        displayName: displayName.trim() || 'Demo Strategist',
-        companyName: companyName.trim(),
-        role: 'member',
-        plan: 'free',
-        ...prev,
-      }));
-      return;
-    }
     if (!auth.currentUser) throw new Error('Not authenticated.');
     const cleanName = displayName.trim().slice(0, 120);
     const cleanCompany = companyName.trim().slice(0, 120);
@@ -349,31 +361,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     setGscAccessToken(null);
-    if (isDemoMode) {
-      setIsDemoMode(false);
-      setProfile(null);
-      return;
-    }
+    setGa4AccessToken(null);
     await signOut(auth);
-  };
-
-  const enterDemoMode = () => {
-    setIsDemoMode(true);
-    setGscAccessToken(null);
-    setProfile({
-      uid: 'demo_user',
-      email: 'demo@rankpilot.app',
-      displayName: 'Alex Mercer (Demo)',
-      companyName: 'RankPilot Demo Workspace',
-      role: 'member',
-      plan: 'free',
-    });
-  };
-
-  const exitDemoMode = () => {
-    setIsDemoMode(false);
-    setGscAccessToken(null);
-    setProfile(null);
   };
 
   return (
@@ -382,13 +371,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         profile,
         authReady,
-        isDemoMode,
         firestoreConnected,
         gscAccessToken,
+        ga4AccessToken,
         authRedirectError,
         clearAuthRedirectError: () => setAuthRedirectError(null),
         connectGoogleSearchConsole,
         clearGscToken,
+        connectGoogleAnalytics4,
+        clearGa4Token,
         signInWithGoogle,
         signInWithGoogleRedirect,
         signInWithEmail,
@@ -398,8 +389,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         reloadUser,
         updateUserProfile,
         logout,
-        enterDemoMode,
-        exitDemoMode,
       }}
     >
       {children}

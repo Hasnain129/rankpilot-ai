@@ -122,6 +122,10 @@ service cloud.firestore {
         && data.hasCanonical is bool
         && data.hasOpenGraph is bool
         && data.mobileFriendly is bool
+        && (!('redirectChain' in data) || (data.redirectChain is list && data.redirectChain.size() <= 20 && (data.redirectChain.size() == 0 || data.redirectChain[0] is string)))
+        && (!('redirectCount' in data) || (data.redirectCount is int && data.redirectCount >= 0 && data.redirectCount <= 20))
+        && (!('metaRobots' in data) || isStr(data.metaRobots, 0, 200))
+        && (!('xRobotsTag' in data) || isStr(data.xRobotsTag, 0, 200))
         && data.issues is list && data.issues.size() <= 30 && (data.issues.size() == 0 || data.issues[0] is map)
         && data.recommendations is list && data.recommendations.size() <= 20 && (data.recommendations.size() == 0 || data.recommendations[0] is map)
         && isStr(data.summary, 0, 2000)
@@ -226,6 +230,8 @@ service cloud.firestore {
         && data.dailySeries is list && data.dailySeries.size() <= 90 && (data.dailySeries.size() == 0 || data.dailySeries[0] is map)
         && data.topQueries is list && data.topQueries.size() <= 50 && (data.topQueries.size() == 0 || data.topQueries[0] is map)
         && data.topPages is list && data.topPages.size() <= 50 && (data.topPages.size() == 0 || data.topPages[0] is map)
+        && (!('topCountries' in data) || (data.topCountries is list && data.topCountries.size() <= 50 && (data.topCountries.size() == 0 || data.topCountries[0] is map)))
+        && (!('topDevices' in data) || (data.topDevices is list && data.topDevices.size() <= 20 && (data.topDevices.size() == 0 || data.topDevices[0] is map)))
         && data.createdAt is timestamp;
     }
 
@@ -275,7 +281,7 @@ service cloud.firestore {
       return isValidId(data.ownerId)
         && data.ownerId == request.auth.uid
         && isValidId(data.websiteId)
-        && data.channel in ['wordpress', 'woocommerce', 'gsc', 'rank_tracker', 'crawler', 'pagespeed']
+        && data.channel in ['wordpress', 'woocommerce', 'gsc', 'ga4', 'rank_tracker', 'crawler', 'pagespeed', 'competitors', 'backlinks', 'recommendations']
         && isStr(data.action, 1, 120)
         && data.status in ['success', 'error', 'warning']
         && isStr(data.detail, 0, 1000)
@@ -413,6 +419,84 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidCompetitorAnalysis(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && isStr(data.competitorDomain, 3, 253)
+        && isStr(data.competitorUrl, 4, 500)
+        && (!('notes' in data) || isStr(data.notes, 0, 1000))
+        && (!('lastAnalyzedAt' in data) || isStr(data.lastAnalyzedAt, 0, 64))
+        && data.crawledPages is list && data.crawledPages.size() <= 15 && (data.crawledPages.size() == 0 || data.crawledPages[0] is map)
+        && data.discoveredKeywords is list && data.discoveredKeywords.size() <= 60 && (data.discoveredKeywords.size() == 0 || data.discoveredKeywords[0] is map)
+        && data.keywordOverlapCount is int && data.keywordOverlapCount >= 0 && data.keywordOverlapCount <= 1000
+        && data.keywordGaps is list && data.keywordGaps.size() <= 40 && (data.keywordGaps.size() == 0 || data.keywordGaps[0] is map)
+        && data.contentOpportunities is list && data.contentOpportunities.size() <= 25 && (data.contentOpportunities.size() == 0 || data.contentOpportunities[0] is map)
+        && data.estimatedVisibilityScore is int && data.estimatedVisibilityScore >= 0 && data.estimatedVisibilityScore <= 100
+        && isStr(data.dataNotice, 0, 1000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBacklinkAnalysis(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && isStr(data.targetDomain, 3, 253)
+        && data.sourceStatus in ['internal_and_serp_check', 'internal_only']
+        && data.externalOutboundDomainsCount is int && data.externalOutboundDomainsCount >= 0 && data.externalOutboundDomainsCount <= 10000
+        && data.internalLinksAnalyzed is int && data.internalLinksAnalyzed >= 0 && data.internalLinksAnalyzed <= 100000
+        && data.anchorTextDistribution is list && data.anchorTextDistribution.size() <= 100 && (data.anchorTextDistribution.size() == 0 || data.anchorTextDistribution[0] is map)
+        && data.orphanRiskPages is list && data.orphanRiskPages.size() <= 100 && (data.orphanRiskPages.size() == 0 || data.orphanRiskPages[0] is string)
+        && data.publicMentionResults is list && data.publicMentionResults.size() <= 50 && (data.publicMentionResults.size() == 0 || data.publicMentionResults[0] is map)
+        && data.brokenOutboundLinks is list && data.brokenOutboundLinks.size() <= 100 && (data.brokenOutboundLinks.size() == 0 || data.brokenOutboundLinks[0] is string)
+        && isStr(data.providerNotice, 0, 1000)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAiSeoRecommendation(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && data.category in ['technical', 'on_page', 'keyword', 'content', 'internal_linking', 'competitor']
+        && data.priority in ['Critical', 'High', 'Medium', 'Low']
+        && data.status in ['open', 'in_progress', 'resolved', 'dismissed']
+        && isStr(data.affectedPage, 1, 500)
+        && isStr(data.whatIsWrong, 1, 1000)
+        && isStr(data.whyItMatters, 1, 1000)
+        && isStr(data.howToFix, 1, 2000)
+        && isStr(data.expectedBenefit, 1, 1000)
+        && isStr(data.sourceBasis, 1, 500)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnalyticsSnapshot(data) {
+      return isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.websiteId)
+        && isStr(data.propertyId, 1, 128)
+        && isStr(data.dateRangeStart, 8, 32)
+        && isStr(data.dateRangeEnd, 8, 32)
+        && data.totalUsers is int && data.totalUsers >= 0
+        && data.newUsers is int && data.newUsers >= 0
+        && data.returningUsers is int && data.returningUsers >= 0
+        && data.sessions is int && data.sessions >= 0
+        && data.organicSessions is int && data.organicSessions >= 0
+        && data.directSessions is int && data.directSessions >= 0
+        && data.referralSessions is int && data.referralSessions >= 0
+        && data.campaignSessions is int && data.campaignSessions >= 0
+        && data.conversions is int && data.conversions >= 0
+        && data.conversionRate is number && data.conversionRate >= 0 && data.conversionRate <= 100
+        && data.purchaseRevenue is number && data.purchaseRevenue >= 0
+        && data.hasVerifiedRevenue is bool
+        && data.trafficSources is list && data.trafficSources.size() <= 40 && (data.trafficSources.size() == 0 || data.trafficSources[0] is map)
+        && data.topLandingPages is list && data.topLandingPages.size() <= 60 && (data.topLandingPages.size() == 0 || data.topLandingPages[0] is map)
+        && data.campaignPerformance is list && data.campaignPerformance.size() <= 60 && (data.campaignPerformance.size() == 0 || data.campaignPerformance[0] is map)
+        && data.dailySeries is list && data.dailySeries.size() <= 95 && (data.dailySeries.size() == 0 || data.dailySeries[0] is map)
+        && data.createdAt is timestamp;
+    }
+
     // -------------------------------------------------------------------------
     // Collection Match Blocks
     // -------------------------------------------------------------------------
@@ -507,7 +591,8 @@ service cloud.firestore {
           'title', 'metaDescription', 'h1Count', 'h2Count', 'h3Count', 'wordCount',
           'totalImages', 'missingAltCount', 'internalLinks', 'externalLinks',
           'brokenLinksCount', 'brokenLinks', 'hasViewport', 'hasCanonical', 'hasOpenGraph',
-          'mobileFriendly', 'issues', 'recommendations', 'summary', 'createdAt'
+          'mobileFriendly', 'redirectChain', 'redirectCount', 'metaRobots', 'xRobotsTag',
+          'issues', 'recommendations', 'summary', 'createdAt'
         ])
         && isValidSeoAudit(incoming())
         && incoming().createdAt == request.time
@@ -626,7 +711,7 @@ service cloud.firestore {
       allow create: if isValidId(snapshotId)
         && isVerified()
         && incoming().keys().hasAll(['ownerId', 'websiteId', 'propertyUrl', 'dateRangeStart', 'dateRangeEnd', 'totalClicks', 'totalImpressions', 'avgCtr', 'avgPosition', 'prevClicks', 'prevImpressions', 'dailySeries', 'topQueries', 'topPages', 'createdAt'])
-        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'propertyUrl', 'dateRangeStart', 'dateRangeEnd', 'totalClicks', 'totalImpressions', 'avgCtr', 'avgPosition', 'prevClicks', 'prevImpressions', 'dailySeries', 'topQueries', 'topPages', 'createdAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'propertyUrl', 'dateRangeStart', 'dateRangeEnd', 'totalClicks', 'totalImpressions', 'avgCtr', 'avgPosition', 'prevClicks', 'prevImpressions', 'dailySeries', 'topQueries', 'topPages', 'topCountries', 'topDevices', 'createdAt'])
         && isValidGscSnapshot(incoming())
         && incoming().createdAt == request.time
         && ownsWebsite(incoming().websiteId);
@@ -859,6 +944,79 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'identifier', 'notes', 'updatedAt']);
       allow delete: if isValidId(integrationId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /competitors/{compId} {
+      allow get: if isValidId(compId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(compId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'competitorDomain', 'competitorUrl', 'crawledPages', 'discoveredKeywords', 'keywordOverlapCount', 'keywordGaps', 'contentOpportunities', 'estimatedVisibilityScore', 'dataNotice', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'competitorDomain', 'competitorUrl', 'notes', 'lastAnalyzedAt', 'crawledPages', 'discoveredKeywords', 'keywordOverlapCount', 'keywordGaps', 'contentOpportunities', 'estimatedVisibilityScore', 'dataNotice', 'createdAt', 'updatedAt'])
+        && isValidCompetitorAnalysis(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if isValidId(compId)
+        && isVerified()
+        && isValidCompetitorAnalysis(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().websiteId == existing().websiteId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(compId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /backlinkAnalyses/{blId} {
+      allow get: if isValidId(blId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(blId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'targetDomain', 'sourceStatus', 'externalOutboundDomainsCount', 'internalLinksAnalyzed', 'anchorTextDistribution', 'orphanRiskPages', 'publicMentionResults', 'brokenOutboundLinks', 'providerNotice', 'createdAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'targetDomain', 'sourceStatus', 'externalOutboundDomainsCount', 'internalLinksAnalyzed', 'anchorTextDistribution', 'orphanRiskPages', 'publicMentionResults', 'brokenOutboundLinks', 'providerNotice', 'createdAt'])
+        && isValidBacklinkAnalysis(incoming())
+        && incoming().createdAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if false;
+      allow delete: if isValidId(blId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /seoRecommendations/{recId} {
+      allow get: if isValidId(recId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(recId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'category', 'priority', 'status', 'affectedPage', 'whatIsWrong', 'whyItMatters', 'howToFix', 'expectedBenefit', 'sourceBasis', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'category', 'priority', 'status', 'affectedPage', 'whatIsWrong', 'whyItMatters', 'howToFix', 'expectedBenefit', 'sourceBasis', 'createdAt', 'updatedAt'])
+        && isValidAiSeoRecommendation(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if isValidId(recId)
+        && isVerified()
+        && isValidAiSeoRecommendation(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().websiteId == existing().websiteId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if isValidId(recId) && isVerified() && existing().ownerId == request.auth.uid;
+    }
+
+    match /analyticsSnapshots/{snapId} {
+      allow get: if isValidId(snapId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(snapId)
+        && isVerified()
+        && incoming().keys().hasAll(['ownerId', 'websiteId', 'propertyId', 'dateRangeStart', 'dateRangeEnd', 'totalUsers', 'newUsers', 'returningUsers', 'sessions', 'organicSessions', 'directSessions', 'referralSessions', 'campaignSessions', 'conversions', 'conversionRate', 'purchaseRevenue', 'hasVerifiedRevenue', 'trafficSources', 'topLandingPages', 'campaignPerformance', 'dailySeries', 'createdAt'])
+        && incoming().keys().hasOnly(['ownerId', 'websiteId', 'propertyId', 'dateRangeStart', 'dateRangeEnd', 'totalUsers', 'newUsers', 'returningUsers', 'sessions', 'organicSessions', 'directSessions', 'referralSessions', 'campaignSessions', 'conversions', 'conversionRate', 'purchaseRevenue', 'hasVerifiedRevenue', 'trafficSources', 'topLandingPages', 'campaignPerformance', 'dailySeries', 'createdAt'])
+        && isValidAnalyticsSnapshot(incoming())
+        && incoming().createdAt == request.time
+        && ownsWebsite(incoming().websiteId);
+      allow update: if false;
+      allow delete: if isValidId(snapId) && isVerified() && existing().ownerId == request.auth.uid;
     }
   }
 }

@@ -4,25 +4,20 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
-import { CrawledPageSummary, Lead, NavSection, OrderChannel, Quote, Website, WpEntity } from './types';
+import { CrawledPageSummary, NavSection, Website } from './types';
+import { AiRecommendationsView } from './views/AiRecommendationsView';
 import { AuthView } from './views/AuthView';
-import { ContentStudioView } from './views/ContentStudioView';
 import { DashboardView } from './views/DashboardView';
-import { IntegrationsView } from './views/IntegrationsView';
+import { Ga4IntegrationView } from './views/Ga4IntegrationView';
 import { KeywordResearchView } from './views/KeywordResearchView';
-import { LeadsView } from './views/LeadsView';
 import { OptimizationCenterView, OptimizationPrefill } from './views/OptimizationCenterView';
-import { OrdersView } from './views/OrdersView';
 import { ProfileSettingsView } from './views/ProfileSettingsView';
-import { QuotesView } from './views/QuotesView';
 import { RankTrackerView } from './views/RankTrackerView';
-import { SalesAnalyticsView } from './views/SalesAnalyticsView';
 import { SearchConsoleView } from './views/SearchConsoleView';
 import { SeoAnalyzerView } from './views/SeoAnalyzerView';
+import { SeoReportsView } from './views/SeoReportsView';
 import { TechnicalMonitorView } from './views/TechnicalMonitorView';
-import { VisitorTrackingView } from './views/VisitorTrackingView';
 import { WebsitesView } from './views/WebsitesView';
-import { WordPressView } from './views/WordPressView';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -66,16 +61,8 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   }
 }
 
-const LEAD_TO_ORDER_CHANNEL: Record<string, OrderChannel> = {
-  'Organic Search': 'Organic Search',
-  Direct: 'Direct',
-  Referral: 'Referral',
-  'Paid Search': 'Paid Search',
-  Social: 'Social',
-};
-
 function WorkspaceApp() {
-  const { user, authReady, isDemoMode } = useAuth();
+  const { user, authReady } = useAuth();
   const { toast } = useToast();
   const data = useWorkspaceData();
 
@@ -84,10 +71,8 @@ function WorkspaceApp() {
   const [showAddWebsiteModal, setShowAddWebsiteModal] = useState(false);
 
   const [scanTargetUrl, setScanTargetUrl] = useState<string | undefined>(undefined);
-  const [contentPrefillKeyword, setContentPrefillKeyword] = useState<string | undefined>(undefined);
-  const [contentPrefillTitle, setContentPrefillTitle] = useState<string | undefined>(undefined);
-  const [quotePrefillLead, setQuotePrefillLead] = useState<Lead | null>(null);
   const [optimizePrefill, setOptimizePrefill] = useState<OptimizationPrefill | null>(null);
+  const [onPageInitialTab, setOnPageInitialTab] = useState<'drafts' | 'wordpress' | undefined>(undefined);
   const [technicalPrefillUrl, setTechnicalPrefillUrl] = useState<string | undefined>(undefined);
 
   // Reset scope if currently selected website was deleted
@@ -114,9 +99,12 @@ function WorkspaceApp() {
     );
   }
 
-  if (!user && !isDemoMode) {
+  if (!user) {
     return <AuthView />;
   }
+
+  const resolvedWebsiteId =
+    selectedWebsiteId !== 'all' ? selectedWebsiteId : data.websites[0]?.id || '';
 
   const handleQuickAddWebsite = () => {
     setActiveSection('websites');
@@ -126,7 +114,7 @@ function WorkspaceApp() {
   const handleScanWebsite = (site: Website) => {
     setSelectedWebsiteId(site.id);
     setScanTargetUrl(site.url);
-    setActiveSection('seo-analyzer');
+    setActiveSection('website-audit');
   };
 
   const handleSendPageToOptimizer = (page: CrawledPageSummary, websiteId: string) => {
@@ -137,21 +125,29 @@ function WorkspaceApp() {
       targetUrl: page.url,
       title: page.title || page.h1,
     });
-    setActiveSection('optimization-center');
+    setOnPageInitialTab('drafts');
+    setActiveSection('on-page-seo');
   };
 
-  const handleOptimizeWpEntity = (entity: WpEntity) => {
-    setSelectedWebsiteId(entity.websiteId);
+  const handleSendKeywordToOnPageSeo = (keyword: string, suggestedTitleOrUrl?: string) => {
+    const activeSite =
+      (selectedWebsiteId !== 'all'
+        ? data.websites.find((w) => w.id === selectedWebsiteId)
+        : data.websites[0]) || null;
+    if (!activeSite) {
+      handleQuickAddWebsite();
+      return;
+    }
+    const isUrl = Boolean(suggestedTitleOrUrl && /^https?:\/\//i.test(suggestedTitleOrUrl));
     setOptimizePrefill({
-      websiteId: entity.websiteId,
-      entityId: entity.id,
-      remoteId: entity.remoteId,
-      entityType: entity.entityType,
-      targetUrl: entity.url,
-      title: entity.title,
-      targetKeyword: entity.focusKeyword,
+      websiteId: activeSite.id,
+      entityType: 'url',
+      targetUrl: isUrl ? suggestedTitleOrUrl! : activeSite.url,
+      title: isUrl ? undefined : suggestedTitleOrUrl,
+      targetKeyword: keyword,
     });
-    setActiveSection('optimization-center');
+    setOnPageInitialTab('drafts');
+    setActiveSection('on-page-seo');
   };
 
   const handleOptimizeUrlFromGsc = (url: string, websiteId: string, query?: string) => {
@@ -162,7 +158,8 @@ function WorkspaceApp() {
       targetUrl: url,
       targetKeyword: query,
     });
-    setActiveSection('optimization-center');
+    setOnPageInitialTab('drafts');
+    setActiveSection('on-page-seo');
   };
 
   const handleTrackKeywordFromGsc = async (keyword: string, url: string, websiteId: string) => {
@@ -181,57 +178,20 @@ function WorkspaceApp() {
     setActiveSection('rank-tracker');
   };
 
-  const handleSendToContentStudio = (keyword: string, title?: string) => {
-    setContentPrefillKeyword(keyword);
-    setContentPrefillTitle(title);
-    setActiveSection('content-studio');
-  };
-
-  const handleConvertLeadToQuote = (lead: Lead) => {
-    setQuotePrefillLead(lead);
-    setActiveSection('quotes');
-  };
-
-  const handleAcceptQuote = async (quote: Quote) => {
-    await data.updateQuote(quote.id, { status: 'Accepted' });
-    if (quote.leadId) {
-      const linkedLead = data.leads.find((l) => l.id === quote.leadId);
-      if (linkedLead && linkedLead.status !== 'Converted') {
-        await data.updateLead(linkedLead.id, { status: 'Converted' });
-      }
+  const handleRecommendationTarget = (section: NavSection, url?: string) => {
+    if (section === 'technical-seo') {
+      setTechnicalPrefillUrl(url);
+    } else if (section === 'website-audit' && url) {
+      setScanTargetUrl(url);
+    } else if (section === 'on-page-seo' && url && resolvedWebsiteId) {
+      setOptimizePrefill({
+        websiteId: resolvedWebsiteId,
+        entityType: 'url',
+        targetUrl: url,
+      });
+      setOnPageInitialTab('drafts');
     }
-  };
-
-  const handleConvertQuoteToOrder = async (quote: Quote) => {
-    const linkedLead = quote.leadId ? data.leads.find((l) => l.id === quote.leadId) : undefined;
-    const channel: OrderChannel =
-      (linkedLead && LEAD_TO_ORDER_CHANNEL[linkedLead.leadSource]) || 'Manual Entry';
-    const entrySource =
-      linkedLead?.trackingSource === 'tracked' ? 'tracked_conversion' : 'manual_entry';
-
-    await data.addOrder({
-      websiteId: quote.websiteId,
-      customerName: quote.customerName,
-      customerEmail: quote.customerEmail,
-      productOrService: quote.serviceOrProduct,
-      amount: quote.amount,
-      currency: quote.currency,
-      channel,
-      entrySource,
-      status: 'Completed',
-      orderDate: new Date().toISOString().slice(0, 10),
-    });
-
-    if (linkedLead && linkedLead.status !== 'Converted') {
-      await data.updateLead(linkedLead.id, { status: 'Converted' });
-    }
-
-    toast({
-      title: 'Order created from accepted quote',
-      description: `${quote.customerName} · $${quote.amount.toLocaleString()}`,
-      variant: 'success',
-    });
-    setActiveSection('orders');
+    setActiveSection(section);
   };
 
   return (
@@ -250,12 +210,10 @@ function WorkspaceApp() {
           siteCrawls={data.siteCrawls}
           seoOptimizations={data.seoOptimizations}
           gscSnapshots={data.gscSnapshots}
+          analyticsSnapshots={data.analyticsSnapshots}
           trackedKeywords={data.trackedKeywords}
           technicalSnapshots={data.technicalSnapshots}
-          visitorEvents={data.visitorEvents}
-          leads={data.leads}
-          quotes={data.quotes}
-          orders={data.orders}
+          seoRecommendations={data.seoRecommendations}
           selectedWebsiteId={selectedWebsiteId}
           loading={data.loading}
           error={data.error}
@@ -264,25 +222,7 @@ function WorkspaceApp() {
         />
       )}
 
-      {activeSection === 'websites' && (
-        <WebsitesView
-          websites={data.websites}
-          seoAudits={data.seoAudits}
-          visitorEvents={data.visitorEvents}
-          leads={data.leads}
-          orders={data.orders}
-          loading={data.loading}
-          showAddModal={showAddWebsiteModal}
-          onOpenAddModal={() => setShowAddWebsiteModal(true)}
-          onCloseAddModal={() => setShowAddWebsiteModal(false)}
-          onAddWebsite={data.addWebsite}
-          onUpdateWebsite={data.updateWebsite}
-          onDeleteWebsite={data.deleteWebsite}
-          onScanWebsite={handleScanWebsite}
-        />
-      )}
-
-      {activeSection === 'seo-analyzer' && (
+      {activeSection === 'website-audit' && (
         <SeoAnalyzerView
           websites={data.websites}
           seoAudits={data.seoAudits}
@@ -305,50 +245,8 @@ function WorkspaceApp() {
           onSaveProject={data.saveKeywordProject}
           onAssignKeywordToPage={data.assignKeywordToPage}
           onDeleteProject={data.deleteKeywordProject}
-          onSendToContentStudio={handleSendToContentStudio}
+          onSendToOnPageSeo={handleSendKeywordToOnPageSeo}
           onAddTrackedKeyword={data.addTrackedKeyword}
-        />
-      )}
-
-      {activeSection === 'optimization-center' && (
-        <OptimizationCenterView
-          websites={data.websites}
-          wpConnections={data.wpConnections}
-          wpEntities={data.wpEntities}
-          siteCrawls={data.siteCrawls}
-          optimizations={data.seoOptimizations}
-          selectedWebsiteId={selectedWebsiteId}
-          prefill={optimizePrefill}
-          onClearPrefill={() => setOptimizePrefill(null)}
-          onCreateOptimization={data.createOptimization}
-          onUpdateOptimization={data.updateOptimizationDraft}
-          onDeleteOptimization={data.deleteOptimization}
-          onSaveAudit={data.saveSeoAudit}
-          onAddWebsitePrompt={handleQuickAddWebsite}
-          onNavigateToWordPress={() => setActiveSection('wordpress-woo')}
-        />
-      )}
-
-      {activeSection === 'wordpress-woo' && (
-        <WordPressView
-          websites={data.websites}
-          wpConnections={data.wpConnections}
-          wpEntities={data.wpEntities}
-          syncLogs={data.syncLogs}
-          selectedWebsiteId={selectedWebsiteId}
-          onAddWebsitePrompt={handleQuickAddWebsite}
-          onOptimizeEntity={handleOptimizeWpEntity}
-        />
-      )}
-
-      {activeSection === 'search-console' && (
-        <SearchConsoleView
-          websites={data.websites}
-          gscSnapshots={data.gscSnapshots}
-          selectedWebsiteId={selectedWebsiteId}
-          onAddWebsitePrompt={handleQuickAddWebsite}
-          onOptimizeUrl={handleOptimizeUrlFromGsc}
-          onTrackKeyword={handleTrackKeywordFromGsc}
         />
       )}
 
@@ -364,106 +262,104 @@ function WorkspaceApp() {
         />
       )}
 
-      {activeSection === 'technical-monitor' && (
+
+      {activeSection === 'on-page-seo' && (
+        <OptimizationCenterView
+          websites={data.websites}
+          wpConnections={data.wpConnections}
+          wpEntities={data.wpEntities}
+          syncLogs={data.syncLogs}
+          siteCrawls={data.siteCrawls}
+          optimizations={data.seoOptimizations}
+          selectedWebsiteId={selectedWebsiteId}
+          initialTab={onPageInitialTab}
+          onConsumeInitialTab={() => setOnPageInitialTab(undefined)}
+          prefill={optimizePrefill}
+          onClearPrefill={() => setOptimizePrefill(null)}
+          onCreateOptimization={data.createOptimization}
+          onUpdateOptimization={data.updateOptimizationDraft}
+          onDeleteOptimization={data.deleteOptimization}
+          onSaveAudit={data.saveSeoAudit}
+          onAddWebsitePrompt={handleQuickAddWebsite}
+        />
+      )}
+
+      {activeSection === 'technical-seo' && (
         <TechnicalMonitorView
           websites={data.websites}
           technicalSnapshots={data.technicalSnapshots}
+          siteCrawls={data.siteCrawls}
           selectedWebsiteId={selectedWebsiteId}
           initialUrl={technicalPrefillUrl}
           onAddWebsitePrompt={handleQuickAddWebsite}
         />
       )}
 
-      {activeSection === 'content-studio' && (
-        <ContentStudioView
+      {activeSection === 'ai-recommendations' && (
+        <AiRecommendationsView
           websites={data.websites}
-          contents={data.generatedContents}
+          seoRecommendations={data.seoRecommendations}
+          seoAudits={data.seoAudits}
+          siteCrawls={data.siteCrawls}
+          gscSnapshots={data.gscSnapshots}
+          analyticsSnapshots={data.analyticsSnapshots}
+          technicalSnapshots={data.technicalSnapshots}
           selectedWebsiteId={selectedWebsiteId}
-          prefillKeyword={contentPrefillKeyword}
-          prefillTitle={contentPrefillTitle}
-          onSaveContent={data.saveGeneratedContent}
-          onUpdateContent={data.updateGeneratedContent}
-          onDeleteContent={data.deleteGeneratedContent}
-        />
-      )}
-
-      {activeSection === 'visitor-tracking' && (
-        <VisitorTrackingView
-          websites={data.websites}
-          visitorEvents={data.visitorEvents}
-          selectedWebsiteId={selectedWebsiteId}
-          onAddDemoEvent={data.addDemoVisitorEvent}
+          onUpdateStatus={data.updateRecommendationStatus}
+          onDelete={data.deleteRecommendation}
+          onNavigateToTarget={handleRecommendationTarget}
           onAddWebsitePrompt={handleQuickAddWebsite}
         />
       )}
 
-      {activeSection === 'leads' && (
-        <LeadsView
+      {activeSection === 'seo-reports' && (
+        <SeoReportsView
           websites={data.websites}
-          leads={data.leads}
+          seoAudits={data.seoAudits}
+          siteCrawls={data.siteCrawls}
+          gscSnapshots={data.gscSnapshots}
+          analyticsSnapshots={data.analyticsSnapshots}
+          trackedKeywords={data.trackedKeywords}
+          technicalSnapshots={data.technicalSnapshots}
+          seoRecommendations={data.seoRecommendations}
           selectedWebsiteId={selectedWebsiteId}
+          onAddWebsitePrompt={handleQuickAddWebsite}
+        />
+      )}
+
+      {activeSection === 'websites' && (
+        <WebsitesView
+          websites={data.websites}
+          seoAudits={data.seoAudits}
+          siteCrawls={data.siteCrawls}
           loading={data.loading}
-          onAddLead={data.addLead}
-          onUpdateLead={data.updateLead}
-          onDeleteLead={data.deleteLead}
-          onConvertLeadToQuote={handleConvertLeadToQuote}
-          onAddWebsitePrompt={handleQuickAddWebsite}
+          showAddModal={showAddWebsiteModal}
+          onOpenAddModal={() => setShowAddWebsiteModal(true)}
+          onCloseAddModal={() => setShowAddWebsiteModal(false)}
+          onAddWebsite={data.addWebsite}
+          onUpdateWebsite={data.updateWebsite}
+          onDeleteWebsite={data.deleteWebsite}
+          onScanWebsite={handleScanWebsite}
         />
       )}
 
-      {activeSection === 'quotes' && (
-        <QuotesView
+      {activeSection === 'search-console' && (
+        <SearchConsoleView
           websites={data.websites}
-          quotes={data.quotes}
+          gscSnapshots={data.gscSnapshots}
           selectedWebsiteId={selectedWebsiteId}
-          loading={data.loading}
-          prefillLead={quotePrefillLead}
-          onClearPrefillLead={() => setQuotePrefillLead(null)}
-          onAddQuote={data.addQuote}
-          onUpdateQuote={data.updateQuote}
-          onAcceptQuote={handleAcceptQuote}
-          onDeleteQuote={data.deleteQuote}
-          onConvertQuoteToOrder={handleConvertQuoteToOrder}
           onAddWebsitePrompt={handleQuickAddWebsite}
+          onOptimizeUrl={handleOptimizeUrlFromGsc}
+          onTrackKeyword={handleTrackKeywordFromGsc}
         />
       )}
 
-      {activeSection === 'orders' && (
-        <OrdersView
+      {activeSection === 'ga4-integration' && (
+        <Ga4IntegrationView
           websites={data.websites}
-          orders={data.orders}
+          analyticsSnapshots={data.analyticsSnapshots}
           selectedWebsiteId={selectedWebsiteId}
-          loading={data.loading}
-          onAddOrder={data.addOrder}
-          onUpdateOrder={data.updateOrder}
-          onDeleteOrder={data.deleteOrder}
           onAddWebsitePrompt={handleQuickAddWebsite}
-          onOpenIntegrations={() => setActiveSection('integrations')}
-        />
-      )}
-
-      {activeSection === 'sales-analytics' && (
-        <SalesAnalyticsView
-          visitorEvents={data.visitorEvents}
-          leads={data.leads}
-          quotes={data.quotes}
-          orders={data.orders}
-          selectedWebsiteId={selectedWebsiteId}
-        />
-      )}
-
-      {activeSection === 'integrations' && (
-        <IntegrationsView
-          websites={data.websites}
-          integrations={data.integrations}
-          wpConnections={data.wpConnections}
-          selectedWebsiteId={selectedWebsiteId}
-          onSaveConfig={data.saveIntegrationConfig}
-          onAddWebsitePrompt={handleQuickAddWebsite}
-          onNavigate={(sec) => {
-            if (sec === 'technical-monitor') setTechnicalPrefillUrl(undefined);
-            setActiveSection(sec);
-          }}
         />
       )}
 

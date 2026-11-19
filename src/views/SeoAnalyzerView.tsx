@@ -59,11 +59,11 @@ export function SeoAnalyzerView({
         setTargetWebsiteId(site.id);
         setScanUrl(site.url);
       }
-    } else if (!targetWebsiteId && websites[0]) {
-      setTargetWebsiteId(websites[0].id);
-      setScanUrl(websites[0].url);
+    } else if (websites[0]) {
+      setTargetWebsiteId((prev) => prev || websites[0].id);
+      setScanUrl((prev) => prev || websites[0].url);
     }
-  }, [selectedWebsiteId, initialTargetUrl, websites, targetWebsiteId]);
+  }, [selectedWebsiteId, initialTargetUrl, websites]);
 
   const displayedAudit =
     activeAudit ||
@@ -417,6 +417,7 @@ export function SeoAnalyzerView({
                             </div>
                             <div className="mt-0.5 text-[11px] text-slate-500">
                               <span className="capitalize">{pg.pageType}</span> · HTTP {pg.httpStatus} · {pg.loadTimeMs}ms
+                              {(pg.redirectCount ?? 0) > 0 && ` · ${pg.redirectCount} redirect hop(s)`}
                               {pg.noindex && ' · NOINDEX'}
                             </div>
                           </td>
@@ -520,8 +521,8 @@ export function SeoAnalyzerView({
                 </div>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-                <h3 className="font-display text-sm font-semibold mb-3">On-Page Metadata Preview</h3>
+              <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+                <h3 className="font-display text-sm font-semibold">On-Page Metadata &amp; Indexability Preview</h3>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 text-xs">
                   <div>
                     <div className="font-medium text-slate-500 dark:text-slate-400">
@@ -537,6 +538,24 @@ export function SeoAnalyzerView({
                     </div>
                     <p className="mt-1 text-slate-700 dark:text-slate-300">
                       {displayedAudit.metaDescription || 'Missing meta description'}
+                    </p>
+                  </div>
+                  <div>
+                    <div className="font-medium text-slate-500 dark:text-slate-400">
+                      Robots &amp; HTTP Header Directives
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                      meta robots: {displayedAudit.metaRobots || 'index, follow (default)'} · X-Robots-Tag: {displayedAudit.xRobotsTag || 'none'}
+                    </p>
+                  </div>
+                  <div>
+                    <div className="font-medium text-slate-500 dark:text-slate-400">
+                      Redirect Trace ({displayedAudit.redirectCount ?? 0} hop{(displayedAudit.redirectCount ?? 0) === 1 ? '' : 's'})
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] text-slate-700 dark:text-slate-300 truncate">
+                      {displayedAudit.redirectChain && displayedAudit.redirectChain.length > 0
+                        ? displayedAudit.redirectChain.join(' → ')
+                        : 'Direct 200 response (no redirects)'}
                     </p>
                   </div>
                 </div>

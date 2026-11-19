@@ -3,15 +3,12 @@ import { Copy, ExternalLink, Globe, Pencil, Plus, Search, Trash2, X } from 'luci
 import { ScoreRing } from '../components/charts/AnalyticsCharts';
 import { EmptyState, StatusText, TableSkeleton } from '../components/ui/DataState';
 import { useToast } from '../context/ToastContext';
-import { formatCurrency } from '../lib/analytics';
-import { Lead, Order, SeoAudit, VisitorEvent, Website } from '../types';
+import { SeoAudit, SiteCrawl, Website } from '../types';
 
 interface WebsitesViewProps {
   websites: Website[];
   seoAudits: SeoAudit[];
-  visitorEvents: VisitorEvent[];
-  leads: Lead[];
-  orders: Order[];
+  siteCrawls?: SiteCrawl[];
   loading: boolean;
   showAddModal: boolean;
   onOpenAddModal: () => void;
@@ -28,9 +25,7 @@ interface WebsitesViewProps {
 export function WebsitesView({
   websites,
   seoAudits,
-  visitorEvents,
-  leads,
-  orders,
+  siteCrawls = [],
   loading,
   showAddModal,
   onOpenAddModal,
@@ -123,7 +118,7 @@ export function WebsitesView({
             Connected Websites ({websites.length})
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Connect multiple domains, inspect technical SEO scores, edit details, and manage per-site tracking keys.
+            Connect multiple domains, inspect technical SEO scores, edit site details, and launch crawls.
           </p>
         </div>
         <button
@@ -143,20 +138,16 @@ export function WebsitesView({
       ) : websites.length === 0 ? (
         <EmptyState
           title="No websites connected yet"
-          description="Enter your website URL to generate a tracking ID, run live SEO crawls, and isolate leads & revenue per domain."
+          description="Enter your website URL to run live SEO crawls, connect Google Search Console & GA4, and track organic rankings per domain."
           actionLabel="Connect Website"
           onAction={onOpenAddModal}
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {websites.map((site) => {
-            const siteVisitors = new Set(
-              visitorEvents.filter((e) => e.websiteId === site.id).map((e) => e.visitorId)
-            ).size;
-            const siteLeads = leads.filter((l) => l.websiteId === site.id).length;
-            const siteRevenue = orders
-              .filter((o) => o.websiteId === site.id && o.status !== 'Refunded')
-              .reduce((s, o) => s + o.amount, 0);
+            const siteAuditsCount = seoAudits.filter((a) => a.websiteId === site.id).length;
+            const latestSiteCrawl = siteCrawls.find((c) => c.websiteId === site.id);
+            const crawledPagesCount = latestSiteCrawl?.pages?.length || site.pagesScanned || 0;
 
             return (
               <div
@@ -194,18 +185,18 @@ export function WebsitesView({
 
                   <div className="mt-4 grid grid-cols-3 gap-2 border-y border-slate-100 py-3 dark:border-slate-800">
                     <div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">Visitors</div>
-                      <div className="font-mono text-sm font-semibold tabular-nums">{siteVisitors}</div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">Leads</div>
-                      <div className="font-mono text-sm font-semibold tabular-nums">{siteLeads}</div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">Revenue</div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">SEO Score</div>
                       <div className="font-mono text-sm font-semibold tabular-nums">
-                        {formatCurrency(siteRevenue)}
+                        {site.seoScore > 0 ? `${site.seoScore}/100` : 'Unscanned'}
                       </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">Pages Crawled</div>
+                      <div className="font-mono text-sm font-semibold tabular-nums">{crawledPagesCount}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">Audits</div>
+                      <div className="font-mono text-sm font-semibold tabular-nums">{siteAuditsCount}</div>
                     </div>
                   </div>
 
@@ -444,7 +435,7 @@ export function WebsitesView({
               </button>
             </div>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              A unique tracking ID will be generated automatically for visitor &amp; conversion analytics.
+              A unique workspace site ID will be assigned to isolate your SEO audits, crawls, keywords, and integrations.
             </p>
             <form onSubmit={handleCreate} className="mt-4 space-y-3.5">
               <div>

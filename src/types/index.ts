@@ -1,63 +1,15 @@
-export type LeadStatus = 'New' | 'Contacted' | 'Qualified' | 'Converted' | 'Lost';
-export type LeadSource =
-  | 'Organic Search'
-  | 'Direct'
-  | 'Referral'
-  | 'Paid Search'
-  | 'Social'
-  | 'Email'
-  | 'Website Form';
-
-export type QuoteStatus = 'Pending' | 'Sent' | 'Accepted' | 'Rejected';
-export type OrderStatus = 'Pending' | 'Processing' | 'Completed' | 'Refunded';
-export type OrderChannel =
-  | 'Organic Search'
-  | 'Direct'
-  | 'Referral'
-  | 'Paid Search'
-  | 'Social'
-  | 'Manual Entry'
-  | 'Shopify'
-  | 'WooCommerce';
-export type OrderEntrySource =
-  | 'tracked_conversion'
-  | 'manual_entry'
-  | 'shopify_sync'
-  | 'woocommerce_sync';
-
-export type ContentType =
-  | 'blog'
-  | 'meta_title'
-  | 'meta_description'
-  | 'product_description'
-  | 'landing_page'
-  | 'faq';
-
-export type IntegrationProvider =
-  | 'google_search_console'
-  | 'google_analytics_4'
-  | 'google_pagespeed'
-  | 'shopify'
-  | 'woocommerce'
-  | 'wordpress';
-
 export type NavSection =
   | 'dashboard'
-  | 'websites'
-  | 'seo-analyzer'
+  | 'website-audit'
   | 'keyword-research'
-  | 'optimization-center'
-  | 'wordpress-woo'
-  | 'search-console'
   | 'rank-tracker'
-  | 'technical-monitor'
-  | 'content-studio'
-  | 'visitor-tracking'
-  | 'leads'
-  | 'quotes'
-  | 'orders'
-  | 'sales-analytics'
-  | 'integrations'
+  | 'on-page-seo'
+  | 'technical-seo'
+  | 'ai-recommendations'
+  | 'seo-reports'
+  | 'websites'
+  | 'search-console'
+  | 'ga4-integration'
   | 'profile';
 
 export interface UserProfile {
@@ -125,6 +77,10 @@ export interface SeoAudit {
   hasCanonical: boolean;
   hasOpenGraph: boolean;
   mobileFriendly: boolean;
+  redirectChain?: string[];
+  redirectCount?: number;
+  metaRobots?: string;
+  xRobotsTag?: string;
   issues: SeoIssue[];
   recommendations: SeoRecommendation[];
   summary: string;
@@ -142,8 +98,13 @@ export interface CrawledPageSummary {
   metaDescription: string;
   h1: string;
   h1Count: number;
+  h2Count?: number;
   canonicalUrl: string;
   noindex: boolean;
+  redirectChain?: string[];
+  redirectCount?: number;
+  metaRobots?: string;
+  xRobotsTag?: string;
   wordCount: number;
   missingAltCount: number;
   brokenLinksCount: number;
@@ -429,6 +390,20 @@ export interface GscSnapshot {
     position: number;
     positionDelta?: number;
   }>;
+  topCountries?: Array<{
+    country: string;
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+  }>;
+  topDevices?: Array<{
+    device: string;
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+  }>;
   createdAt?: unknown;
 }
 
@@ -478,107 +453,92 @@ export interface SyncLog {
   id: string;
   ownerId: string;
   websiteId: string;
-  channel: 'wordpress' | 'woocommerce' | 'gsc' | 'rank_tracker' | 'crawler' | 'pagespeed';
+  channel:
+    | 'wordpress'
+    | 'woocommerce'
+    | 'gsc'
+    | 'ga4'
+    | 'rank_tracker'
+    | 'crawler'
+    | 'pagespeed'
+    | 'recommendations';
   action: string;
   status: 'success' | 'error' | 'warning';
   detail: string;
   createdAt?: unknown;
 }
 
-export interface GeneratedContent {
+export type RecommendationCategory =
+  | 'technical'
+  | 'on_page'
+  | 'keyword'
+  | 'content'
+  | 'internal_linking';
+
+export type RecommendationPriority = 'Critical' | 'High' | 'Medium' | 'Low';
+export type RecommendationStatus = 'open' | 'in_progress' | 'resolved' | 'dismissed';
+
+export interface AiSeoRecommendation {
   id: string;
   ownerId: string;
-  websiteId?: string;
-  contentType: ContentType;
-  title: string;
-  targetKeyword?: string;
-  body: string;
-  metaTitle?: string;
-  metaDescription?: string;
-  status: 'draft' | 'published';
+  websiteId: string;
+  category: RecommendationCategory;
+  priority: RecommendationPriority;
+  status: RecommendationStatus;
+  affectedPage: string;
+  whatIsWrong: string;
+  whyItMatters: string;
+  howToFix: string;
+  expectedBenefit: string;
+  sourceBasis: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
 
-export interface VisitorEvent {
+export interface AnalyticsSnapshot {
   id: string;
   ownerId: string;
   websiteId: string;
-  trackingId: string;
-  visitorId: string;
-  sessionId: string;
-  eventType: 'pageview' | 'conversion' | 'lead_submit' | 'quote_request';
-  path: string;
-  referrer?: string;
-  trafficSource: string;
-  utmSource?: string;
-  utmMedium?: string;
-  utmCampaign?: string;
-  deviceType: 'desktop' | 'mobile' | 'tablet';
-  conversionValue: number;
+  propertyId: string;
+  dateRangeStart: string;
+  dateRangeEnd: string;
+  totalUsers: number;
+  newUsers: number;
+  returningUsers: number;
+  sessions: number;
+  organicSessions: number;
+  directSessions: number;
+  referralSessions: number;
+  campaignSessions: number;
+  conversions: number;
+  conversionRate: number;
+  purchaseRevenue: number;
+  hasVerifiedRevenue: boolean;
+  trafficSources: Array<{
+    channel: string;
+    sessions: number;
+    users: number;
+    conversions: number;
+  }>;
+  topLandingPages: Array<{
+    page: string;
+    sessions: number;
+    users: number;
+    conversions: number;
+    revenue: number;
+  }>;
+  campaignPerformance: Array<{
+    campaign: string;
+    sourceMedium: string;
+    sessions: number;
+    conversions: number;
+    revenue: number;
+  }>;
+  dailySeries: Array<{
+    date: string;
+    sessions: number;
+    conversions: number;
+    revenue: number;
+  }>;
   createdAt?: unknown;
-}
-
-export interface Lead {
-  id: string;
-  ownerId: string;
-  websiteId: string;
-  name: string;
-  email: string;
-  phone?: string;
-  company?: string;
-  leadSource: LeadSource;
-  status: LeadStatus;
-  estimatedValue: number;
-  notes?: string;
-  trackingSource: 'tracked' | 'manual';
-  createdAt?: unknown;
-  updatedAt?: unknown;
-}
-
-export interface Quote {
-  id: string;
-  ownerId: string;
-  websiteId: string;
-  leadId?: string;
-  customerName: string;
-  customerEmail: string;
-  serviceOrProduct: string;
-  amount: number;
-  currency: string;
-  status: QuoteStatus;
-  validUntil?: string;
-  notes?: string;
-  createdAt?: unknown;
-  updatedAt?: unknown;
-}
-
-export interface Order {
-  id: string;
-  ownerId: string;
-  websiteId: string;
-  orderNumber: string;
-  customerName: string;
-  customerEmail: string;
-  productOrService: string;
-  amount: number;
-  currency: string;
-  channel: OrderChannel;
-  entrySource: OrderEntrySource;
-  status: OrderStatus;
-  orderDate: string;
-  createdAt?: unknown;
-  updatedAt?: unknown;
-}
-
-export interface IntegrationConfig {
-  id: string;
-  ownerId: string;
-  websiteId: string;
-  provider: IntegrationProvider;
-  status: 'not_connected' | 'configured';
-  identifier?: string;
-  notes?: string;
-  createdAt?: unknown;
-  updatedAt?: unknown;
 }

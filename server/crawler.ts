@@ -27,6 +27,10 @@ export interface CrawledPageReport {
   brokenLinksCount: number;
   schemaTypes: string[];
   mobileFriendly: boolean;
+  redirectChain: string[];
+  redirectCount: number;
+  metaRobots: string;
+  xRobotsTag: string;
   score: number;
   issuesCount: number;
   contentHash: string;
@@ -56,8 +60,13 @@ export interface SiteCrawlResult {
     metaDescription: string;
     h1: string;
     h1Count: number;
+    h2Count: number;
     canonicalUrl: string;
     noindex: boolean;
+    redirectChain: string[];
+    redirectCount: number;
+    metaRobots: string;
+    xRobotsTag: string;
     wordCount: number;
     missingAltCount: number;
     brokenLinksCount: number;
@@ -140,26 +149,37 @@ export async function validatePublicHttpUrl(inputUrl: string): Promise<URL> {
   return parsed;
 }
 
-export async function safePublicFetch(
+export async function safePublicFetchWithTrace(
   initialUrl: URL,
   init: Omit<RequestInit, 'redirect'>,
   maxRedirects = 4
-): Promise<Response> {
+): Promise<{ res: Response; redirectChain: string[] }> {
   let currentUrl = initialUrl;
+  const trace: string[] = [initialUrl.toString()];
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const res = await fetch(currentUrl.toString(), { ...init, redirect: 'manual' });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       if (!location || hop === maxRedirects) {
-        return res;
+        return { res, redirectChain: trace.length > 1 ? trace : [] };
       }
       const nextRaw = new URL(location, currentUrl.toString()).toString();
       currentUrl = await validatePublicHttpUrl(nextRaw);
+      trace.push(currentUrl.toString());
       continue;
     }
-    return res;
+    return { res, redirectChain: trace.length > 1 ? trace : [] };
   }
   throw new Error('Too many redirects.');
+}
+
+export async function safePublicFetch(
+  initialUrl: URL,
+  init: Omit<RequestInit, 'redirect'>,
+  maxRedirects = 4
+): Promise<Response> {
+  const { res } = await safePublicFetchWithTrace(initialUrl, init, maxRedirects);
+  return res;
 }
 
 export async function checkLinkStatus(targetUrl: string): Promise<boolean> {
@@ -262,9 +282,11 @@ export async function inspectPageRaw(targetUrl: string, probeLinksLimit = 4): Pr
   let html = '';
   let httpStatus = 0;
   let loadTimeMs = 0;
+  let redirectChain: string[] = [];
+  let xRobotsTag = '';
 
   try {
-    const res = await safePublicFetch(parsedUrl, {
+    const traced = await safePublicFetchWithTrace(parsedUrl, {
       method: 'GET',
       signal: controller.signal,
       headers: {
@@ -272,6 +294,9 @@ export async function inspectPageRaw(targetUrl: string, probeLinksLimit = 4): Pr
         Accept: 'text/html,application/xhtml+xml',
       },
     });
+    const res = traced.res;
+    redirectChain = traced.redirectChain.slice(0, 10);
+    xRobotsTag = (res.headers.get('x-robots-tag') || '').trim().slice(0, 200);
     httpStatus = res.status;
     html = await res.text();
     loadTimeMs = Date.now() - startTime;
@@ -289,8 +314,10 @@ export async function inspectPageRaw(targetUrl: string, probeLinksLimit = 4): Pr
 
   const canonicalUrl = ($('link[rel="canonical"]').attr('href') || '').trim().slice(0, 500);
   const hasCanonical = canonicalUrl.length > 0;
-  const robotsMeta = ($('meta[name="robots"]').attr('content') || '').toLowerCase();
-  const noindex = robotsMeta.includes('noindex');
+  const metaRobots = ($('meta[name="robots"]').attr('content') || '').trim().slice(0, 200);
+  const robotsMetaLower = `${metaRobots} ${xRobotsTag}`.toLowerCase();
+  const noindex = robotsMetaLower.includes('noindex');
+  const redirectCount = redirectChain.length > 1 ? redirectChain.length - 1 : 0;
   const hasViewport = $('meta[name="viewport"]').length > 0;
   const mobileFriendly = hasViewport;
   const schemaTypes = extractSchemaTypes($);
@@ -447,6 +474,10 @@ export async function inspectPageRaw(targetUrl: string, probeLinksLimit = 4): Pr
       brokenLinksCount,
       schemaTypes,
       mobileFriendly,
+      redirectChain,
+      redirectCount,
+      metaRobots,
+      xRobotsTag,
       score,
       issuesCount,
       contentHash,
@@ -640,6 +671,7 @@ export async function crawlEntireSite(params: {
   let missingCanonical = 0;
   let missingAltPages = 0;
   let noSchemaPages = 0;
+  let redirectingPages = 0;
 
   for (const p of crawledPages) {
     const cleanTitle = p.title.trim().toLowerCase();
@@ -655,6 +687,7 @@ export async function crawlEntireSite(params: {
     if (!p.hasCanonical) missingCanonical++;
     if (p.missingAltCount > 0) missingAltPages++;
     if (p.schemaTypes.length === 0) noSchemaPages++;
+    if (p.redirectCount > 0) redirectingPages++;
     brokenLinksCount += p.brokenLinksCount;
   }
 
@@ -796,6 +829,16 @@ export async function crawlEntireSite(params: {
     });
   }
 
+  if (redirectingPages > 0) {
+    siteIssues.push({
+      severity: 'warning',
+      category: 'Technical SEO',
+      title: `${redirectingPages} page(s) resolved through HTTP redirects`,
+      detail: 'Update internal links to point directly to final canonical URLs and eliminate redirect chains.',
+      affectedCount: redirectingPages,
+    });
+  }
+
   const avgPageScore = Math.round(
     crawledPages.reduce((sum, p) => sum + p.score, 0) / crawledPages.length
   );
@@ -814,8 +857,13 @@ export async function crawlEntireSite(params: {
     metaDescription: p.metaDescription.slice(0, 600),
     h1: p.h1.slice(0, 200),
     h1Count: p.h1Count,
+    h2Count: p.h2Count,
     canonicalUrl: p.canonicalUrl.slice(0, 500),
     noindex: p.noindex,
+    redirectChain: p.redirectChain.slice(0, 10),
+    redirectCount: p.redirectCount,
+    metaRobots: p.metaRobots.slice(0, 200),
+    xRobotsTag: p.xRobotsTag.slice(0, 200),
     wordCount: p.wordCount,
     missingAltCount: p.missingAltCount,
     brokenLinksCount: p.brokenLinksCount,
@@ -840,5 +888,140 @@ export async function crawlEntireSite(params: {
     pages: compactPages,
     siteIssues: siteIssues.slice(0, 30),
     summary: `Crawled ${crawledPages.length} page(s) across ${parsedRoot.hostname} with an overall SEO health score of ${overallScore}/100 (${duplicateTitlesCount} duplicate titles, ${duplicateMetaCount} duplicate metas, ${brokenLinksCount} broken links).`,
+  };
+}
+
+export async function inspectLinksAndAnchors(
+  rootUrl: string,
+  maxPages = 8
+): Promise<{
+  targetDomain: string;
+  internalLinksAnalyzed: number;
+  externalOutboundDomainsCount: number;
+  anchorTextDistribution: Array<{ anchorText: string; count: number; targetType: 'internal' | 'external' }>;
+  orphanRiskPages: string[];
+  brokenOutboundLinks: string[];
+}> {
+  const parsedRoot = await validatePublicHttpUrl(rootUrl);
+  const baseHost = parsedRoot.hostname.replace(/^www\./, '').toLowerCase();
+  const limit = Math.max(1, Math.min(12, maxPages));
+
+  const queue: string[] = [parsedRoot.toString()];
+  const visited = new Set<string>();
+  const crawledUrls: string[] = [];
+  const inboundCount = new Map<string, number>();
+  const externalDomains = new Set<string>();
+  const externalSamples: string[] = [];
+  const anchorMap = new Map<string, { anchorText: string; count: number; targetType: 'internal' | 'external' }>();
+  let internalLinksAnalyzed = 0;
+
+  while (queue.length > 0 && crawledUrls.length < limit) {
+    const nextUrl = queue.shift()!;
+    const normKey = nextUrl.replace(/\/$/, '').toLowerCase();
+    if (visited.has(normKey)) continue;
+    visited.add(normKey);
+
+    try {
+      const validated = await validatePublicHttpUrl(nextUrl);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 7500);
+      let html = '';
+      try {
+        const res = await safePublicFetch(validated, {
+          method: 'GET',
+          signal: ctrl.signal,
+          headers: { 'User-Agent': 'RankPilotBot/2.0', Accept: 'text/html' },
+        });
+        if (!res.ok) continue;
+        html = await res.text();
+      } finally {
+        clearTimeout(timer);
+      }
+
+      crawledUrls.push(validated.toString());
+      const $ = cheerio.load(html);
+
+      $('a[href]').each((_, el) => {
+        const href = ($(el).attr('href') || '').trim();
+        if (
+          !href ||
+          href.startsWith('#') ||
+          href.startsWith('mailto:') ||
+          href.startsWith('tel:') ||
+          href.startsWith('javascript:')
+        ) {
+          return;
+        }
+        try {
+          const resolved = new URL(href, validated.toString());
+          if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return;
+          resolved.hash = '';
+          const host = resolved.hostname.replace(/^www\./, '').toLowerCase();
+          const targetType: 'internal' | 'external' = host === baseHost ? 'internal' : 'external';
+          const rawAnchor = $(el).text().replace(/\s+/g, ' ').trim();
+          const anchorText = (rawAnchor || ($(el).find('img').attr('alt') || '[image/unlabeled]').trim()).slice(0, 80);
+
+          const anchorKey = `${targetType}:${anchorText.toLowerCase()}`;
+          const prevAnchor = anchorMap.get(anchorKey);
+          if (prevAnchor) {
+            prevAnchor.count++;
+          } else if (anchorMap.size < 160) {
+            anchorMap.set(anchorKey, { anchorText, count: 1, targetType });
+          }
+
+          if (targetType === 'internal') {
+            internalLinksAnalyzed++;
+            const cleanTarget = resolved.toString().replace(/\/$/, '').toLowerCase();
+            if (cleanTarget !== normKey) {
+              inboundCount.set(cleanTarget, (inboundCount.get(cleanTarget) || 0) + 1);
+            }
+            if (
+              !resolved.pathname.match(/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|xml|ico)$/i) &&
+              !visited.has(cleanTarget) &&
+              queue.length < 40
+            ) {
+              queue.push(resolved.toString());
+            }
+          } else {
+            externalDomains.add(host);
+            if (externalSamples.length < 12 && !externalSamples.includes(resolved.toString())) {
+              externalSamples.push(resolved.toString());
+            }
+          }
+        } catch {
+          // ignore malformed href
+        }
+      });
+    } catch {
+      // skip unreachable page
+    }
+  }
+
+  const brokenOutboundLinks: string[] = [];
+  if (externalSamples.length > 0) {
+    const probes = await Promise.all(
+      externalSamples.map(async (u) => ({ u, ok: await checkLinkStatus(u) }))
+    );
+    for (const p of probes) {
+      if (!p.ok) brokenOutboundLinks.push(p.u.slice(0, 300));
+    }
+  }
+
+  const orphanRiskPages = crawledUrls
+    .slice(1)
+    .filter((u) => (inboundCount.get(u.replace(/\/$/, '').toLowerCase()) || 0) <= 1)
+    .slice(0, 30);
+
+  const anchorTextDistribution = Array.from(anchorMap.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 40);
+
+  return {
+    targetDomain: parsedRoot.hostname,
+    internalLinksAnalyzed,
+    externalOutboundDomainsCount: externalDomains.size,
+    anchorTextDistribution,
+    orphanRiskPages,
+    brokenOutboundLinks,
   };
 }

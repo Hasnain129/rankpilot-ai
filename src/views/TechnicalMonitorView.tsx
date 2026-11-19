@@ -2,14 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, CheckCircle2, Gauge, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { ScoreRing } from '../components/charts/AnalyticsCharts';
 import { EmptyState, ErrorBanner, StatusText } from '../components/ui/DataState';
-import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { apiFetch } from '../lib/apiClient';
-import { TechnicalSnapshot, Website } from '../types';
+import { SiteCrawl, TechnicalSnapshot, Website } from '../types';
 
 interface TechnicalMonitorViewProps {
   websites: Website[];
   technicalSnapshots: TechnicalSnapshot[];
+  siteCrawls?: SiteCrawl[];
   selectedWebsiteId: string;
   initialUrl?: string;
   onAddWebsitePrompt: () => void;
@@ -25,11 +25,11 @@ function vitalTone(metric: 'lcp' | 'cls' | 'inp' | 'ttfb', val: number): 'succes
 export function TechnicalMonitorView({
   websites,
   technicalSnapshots,
+  siteCrawls = [],
   selectedWebsiteId,
   initialUrl,
   onAddWebsitePrompt,
 }: TechnicalMonitorViewProps) {
-  const { isDemoMode } = useAuth();
   const { toast } = useToast();
 
   const activeSite =
@@ -44,8 +44,8 @@ export function TechnicalMonitorView({
 
   useEffect(() => {
     if (initialUrl) setTargetUrl(initialUrl);
-    else if (activeSite?.url && !targetUrl) setTargetUrl(activeSite.url);
-  }, [initialUrl, activeSite, targetUrl]);
+    else if (activeSite?.url) setTargetUrl(activeSite.url);
+  }, [initialUrl, activeSite]);
 
   const scopedSnaps = useMemo(() => {
     if (!activeSite) return [];
@@ -54,6 +54,31 @@ export function TechnicalMonitorView({
 
   const activeSnap =
     scopedSnaps.find((s) => s.id === activeSnapId) || scopedSnaps[0] || null;
+
+  const latestCrawl = useMemo(() => {
+    if (!activeSite) return null;
+    return siteCrawls.find((c) => c.websiteId === activeSite.id) || null;
+  }, [siteCrawls, activeSite]);
+
+  const crawlTechSummary = useMemo(() => {
+    if (!latestCrawl) return null;
+    const pages = latestCrawl.pages || [];
+    const noindexCount = pages.filter(
+      (p) =>
+        (p.metaRobots || '').toLowerCase().includes('noindex') ||
+        (p.xRobotsTag || '').toLowerCase().includes('noindex')
+    ).length;
+    const redirectCount = pages.filter((p) => (p.redirectChain?.length || 0) > 1).length;
+    const missingCanonicalCount = pages.filter((p) => !p.canonicalUrl).length;
+    return {
+      totalPages: pages.length,
+      noindexCount: latestCrawl.noindexCount || noindexCount,
+      redirectCount,
+      missingCanonicalCount,
+      duplicateTitles: latestCrawl.duplicateTitlesCount || 0,
+      duplicateMetas: latestCrawl.duplicateMetaCount || 0,
+    };
+  }, [latestCrawl]);
 
   if (!activeSite) {
     return (
@@ -69,14 +94,6 @@ export function TechnicalMonitorView({
   const runCheck = async (urlToTest: string, strat: 'mobile' | 'desktop') => {
     setError(null);
     if (!urlToTest.trim()) return;
-    if (isDemoMode) {
-      toast({
-        title: 'Demo Mode',
-        description: 'Sign in with a verified account to run live PageSpeed Insights checks.',
-        variant: 'info',
-      });
-      return;
-    }
     setRunning(true);
     try {
       const data = await apiFetch<{
@@ -266,6 +283,27 @@ export function TechnicalMonitorView({
                     tone={activeSnap.sitemapStatus?.includes('Missing') ? 'warning' : 'success'}
                   />
                 </div>
+                {crawlTechSummary ? (
+                  <>
+                    <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                      <span className="text-slate-500">Crawled Pages ({crawlTechSummary.totalPages})</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        {crawlTechSummary.duplicateTitles} dup titles · {crawlTechSummary.duplicateMetas} dup meta
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                      <span className="text-slate-500">Indexability &amp; Redirects</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        {crawlTechSummary.noindexCount} noindex · {crawlTechSummary.redirectCount} redirects ·{' '}
+                        {crawlTechSummary.missingCanonicalCount} no canonical
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-[11px] text-slate-500">
+                    Run a full-site crawl under Website Audit to populate canonical, noindex, and redirect diagnostics.
+                  </p>
+                )}
               </div>
             </div>
           </div>

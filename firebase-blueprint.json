@@ -76,6 +76,10 @@
         "hasCanonical": { "type": "boolean" },
         "hasOpenGraph": { "type": "boolean" },
         "mobileFriendly": { "type": "boolean" },
+        "redirectChain": { "type": "array" },
+        "redirectCount": { "type": "integer" },
+        "metaRobots": { "type": "string", "maxLength": 200 },
+        "xRobotsTag": { "type": "string", "maxLength": 200 },
         "issues": { "type": "array" },
         "recommendations": { "type": "array" },
         "summary": { "type": "string", "maxLength": 2000 },
@@ -211,6 +215,8 @@
         "dailySeries": { "type": "array" },
         "topQueries": { "type": "array" },
         "topPages": { "type": "array" },
+        "topCountries": { "type": "array" },
+        "topDevices": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["ownerId", "websiteId", "propertyUrl", "dateRangeStart", "dateRangeEnd", "totalClicks", "totalImpressions", "avgCtr", "avgPosition", "prevClicks", "prevImpressions", "dailySeries", "topQueries", "topPages", "createdAt"]
@@ -272,7 +278,7 @@
       "properties": {
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "channel": { "type": "string", "enum": ["wordpress", "woocommerce", "gsc", "rank_tracker", "crawler", "pagespeed"] },
+        "channel": { "type": "string", "enum": ["wordpress", "woocommerce", "gsc", "ga4", "rank_tracker", "crawler", "pagespeed", "competitors", "backlinks", "recommendations"] },
         "action": { "type": "string", "minLength": 1, "maxLength": 120 },
         "status": { "type": "string", "enum": ["success", "error", "warning"] },
         "detail": { "type": "string", "maxLength": 1000 },
@@ -429,6 +435,100 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["ownerId", "websiteId", "provider", "status", "createdAt", "updatedAt"]
+    },
+    "CompetitorAnalysis": {
+      "title": "CompetitorAnalysis",
+      "description": "Competitor SEO crawl, keyword gap, and content opportunity comparison",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "competitorDomain": { "type": "string", "minLength": 3, "maxLength": 253 },
+        "competitorUrl": { "type": "string", "minLength": 4, "maxLength": 500 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "lastAnalyzedAt": { "type": "string", "maxLength": 64 },
+        "crawledPages": { "type": "array" },
+        "discoveredKeywords": { "type": "array" },
+        "keywordOverlapCount": { "type": "integer" },
+        "keywordGaps": { "type": "array" },
+        "contentOpportunities": { "type": "array" },
+        "estimatedVisibilityScore": { "type": "integer" },
+        "dataNotice": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "competitorDomain", "competitorUrl", "crawledPages", "discoveredKeywords", "keywordOverlapCount", "keywordGaps", "contentOpportunities", "estimatedVisibilityScore", "dataNotice", "createdAt", "updatedAt"]
+    },
+    "BacklinkAnalysis": {
+      "title": "BacklinkAnalysis",
+      "description": "Internal link & anchor profile audit paired with optional public web mention search",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetDomain": { "type": "string", "minLength": 3, "maxLength": 253 },
+        "sourceStatus": { "type": "string", "enum": ["internal_and_serp_check", "internal_only"] },
+        "externalOutboundDomainsCount": { "type": "integer" },
+        "internalLinksAnalyzed": { "type": "integer" },
+        "anchorTextDistribution": { "type": "array" },
+        "orphanRiskPages": { "type": "array" },
+        "publicMentionResults": { "type": "array" },
+        "brokenOutboundLinks": { "type": "array" },
+        "providerNotice": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "targetDomain", "sourceStatus", "externalOutboundDomainsCount", "internalLinksAnalyzed", "anchorTextDistribution", "orphanRiskPages", "publicMentionResults", "brokenOutboundLinks", "providerNotice", "createdAt"]
+    },
+    "AiSeoRecommendation": {
+      "title": "AiSeoRecommendation",
+      "description": "Actionable AI SEO growth recommendation grounded in website audit, GSC, GA4, and keyword data",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category": { "type": "string", "enum": ["technical", "on_page", "keyword", "content", "internal_linking", "competitor"] },
+        "priority": { "type": "string", "enum": ["Critical", "High", "Medium", "Low"] },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved", "dismissed"] },
+        "affectedPage": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "whatIsWrong": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "whyItMatters": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "howToFix": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedBenefit": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "sourceBasis": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "category", "priority", "status", "affectedPage", "whatIsWrong", "whyItMatters", "howToFix", "expectedBenefit", "sourceBasis", "createdAt", "updatedAt"]
+    },
+    "AnalyticsSnapshot": {
+      "title": "AnalyticsSnapshot",
+      "description": "Verified Google Analytics 4 traffic, landing page, campaign, and conversion telemetry snapshot",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "websiteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "propertyId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "dateRangeStart": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "dateRangeEnd": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "totalUsers": { "type": "integer" },
+        "newUsers": { "type": "integer" },
+        "returningUsers": { "type": "integer" },
+        "sessions": { "type": "integer" },
+        "organicSessions": { "type": "integer" },
+        "directSessions": { "type": "integer" },
+        "referralSessions": { "type": "integer" },
+        "campaignSessions": { "type": "integer" },
+        "conversions": { "type": "integer" },
+        "conversionRate": { "type": "number" },
+        "purchaseRevenue": { "type": "number" },
+        "hasVerifiedRevenue": { "type": "boolean" },
+        "trafficSources": { "type": "array" },
+        "topLandingPages": { "type": "array" },
+        "campaignPerformance": { "type": "array" },
+        "dailySeries": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "websiteId", "propertyId", "dateRangeStart", "dateRangeEnd", "totalUsers", "newUsers", "returningUsers", "sessions", "organicSessions", "directSessions", "referralSessions", "campaignSessions", "conversions", "conversionRate", "purchaseRevenue", "hasVerifiedRevenue", "trafficSources", "topLandingPages", "campaignPerformance", "dailySeries", "createdAt"]
     }
   },
   "firestore": {
@@ -507,6 +607,22 @@
     "/integrations/{integrationId}": {
       "schema": { "$ref": "#/entities/IntegrationConfig" },
       "description": "External integration settings scoped by ownerId and websiteId"
+    },
+    "/competitors/{compId}": {
+      "schema": { "$ref": "#/entities/CompetitorAnalysis" },
+      "description": "Competitor domain analyses and keyword/content gap insights scoped by ownerId and websiteId"
+    },
+    "/backlinkAnalyses/{blId}": {
+      "schema": { "$ref": "#/entities/BacklinkAnalysis" },
+      "description": "Internal link graph, anchor text profile, and web mention analyses scoped by ownerId and websiteId"
+    },
+    "/seoRecommendations/{recId}": {
+      "schema": { "$ref": "#/entities/AiSeoRecommendation" },
+      "description": "Actionable AI SEO recommendations with trackable resolution workflow"
+    },
+    "/analyticsSnapshots/{snapId}": {
+      "schema": { "$ref": "#/entities/AnalyticsSnapshot" },
+      "description": "Verified Google Analytics 4 snapshots scoped by ownerId and websiteId"
     }
   }
 }

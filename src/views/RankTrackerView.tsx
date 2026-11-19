@@ -38,15 +38,15 @@ function sourceLabel(src: TrackedKeyword['sourceType']): {
 } {
   if (src === 'gsc_verified') return { label: 'Verified GSC', tone: 'success' };
   if (src === 'serp_api') return { label: 'SERP API', tone: 'info' };
-  return { label: 'Pending Sync', tone: 'warning' };
+  return { label: 'Unretrieved', tone: 'warning' };
 }
 
 function RankHistoryChart({ keyword }: { keyword: TrackedKeyword }) {
-  const points = keyword.history || [];
-  if (points.length === 0) {
+  const validPoints = (keyword.history || []).filter((p) => p.position > 0);
+  if (validPoints.length === 0) {
     return (
       <div className="py-10 text-center text-xs text-slate-500">
-        No ranking checkpoints recorded yet. Run &ldquo;Sync Verified Rankings&rdquo; to populate position history.
+        No ranked checkpoints recorded yet. Run &ldquo;Sync Verified Rankings&rdquo; with Google Search Console or SERP API to plot positive positions.
       </div>
     );
   }
@@ -60,17 +60,17 @@ function RankHistoryChart({ keyword }: { keyword: TrackedKeyword }) {
   const innerW = width - padL - padR;
   const innerH = height - padT - padB;
 
-  const validPositions = points.map((p) => p.position).filter((p) => p > 0);
+  const validPositions = validPoints.map((p) => p.position);
   const maxPos = Math.max(10, ...validPositions, 20);
   const getX = (i: number) =>
-    points.length <= 1 ? padL + innerW / 2 : padL + (i / (points.length - 1)) * innerW;
+    validPoints.length <= 1 ? padL + innerW / 2 : padL + (i / (validPoints.length - 1)) * innerW;
   // Inverted Y-axis: Rank #1 at top
   const getY = (pos: number) => {
-    const clamped = pos > 0 ? Math.min(maxPos, Math.max(1, pos)) : maxPos;
+    const clamped = Math.min(maxPos, Math.max(1, pos));
     return padT + ((clamped - 1) / Math.max(1, maxPos - 1)) * innerH;
   };
 
-  const poly = points.map((p, i) => `${getX(i)},${getY(p.position)}`).join(' ');
+  const poly = validPoints.map((p, i) => `${getX(i)},${getY(p.position)}`).join(' ');
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="h-48 w-full overflow-visible">
@@ -97,15 +97,17 @@ function RankHistoryChart({ keyword }: { keyword: TrackedKeyword }) {
           </g>
         );
       })}
-      <polyline
-        fill="none"
-        stroke="#4f46e5"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        points={poly}
-      />
-      {points.map((p, i) => (
+      {validPoints.length > 1 && (
+        <polyline
+          fill="none"
+          stroke="#4f46e5"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={poly}
+        />
+      )}
+      {validPoints.map((p, i) => (
         <g key={p.date + i}>
           <circle
             cx={getX(i)}
@@ -137,7 +139,7 @@ export function RankTrackerView({
   onDeleteTrackedKeyword,
   onAddWebsitePrompt,
 }: RankTrackerViewProps) {
-  const { isDemoMode, gscAccessToken } = useAuth();
+  const { gscAccessToken } = useAuth();
   const { toast } = useToast();
 
   const activeSite =
@@ -209,14 +211,6 @@ export function RankTrackerView({
   const handleSyncRankings = async () => {
     setError(null);
     if (scopedKeywords.length === 0) return;
-    if (isDemoMode) {
-      toast({
-        title: 'Demo Mode',
-        description: 'Sign in and connect Search Console OAuth or SERP_API_KEY to fetch live positions.',
-        variant: 'info',
-      });
-      return;
-    }
     setSyncing(true);
     try {
       const data = await apiFetch<{ updated?: Array<{ id: string }> }>('/api/rank-tracker/check', {
@@ -359,7 +353,7 @@ export function RankTrackerView({
           <div className="mt-1 font-mono text-2xl font-semibold tabular-nums">{scopedKeywords.length}</div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="text-xs font-medium text-slate-500">Ranked in Top 50</div>
+          <div className="text-xs font-medium text-slate-500">Ranked Keywords</div>
           <div className="mt-1 font-mono text-2xl font-semibold tabular-nums">{ranked.length}</div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -432,8 +426,19 @@ export function RankTrackerView({
                           <StatusText label={src.label} tone={src.tone} />
                         </td>
                         <td className="px-4 py-3 text-right font-mono tabular-nums">
-                          <span className="font-semibold">
-                            {kw.currentPosition > 0 ? `#${kw.currentPosition.toFixed(1)}` : '—'}
+                          <span
+                            className="font-semibold"
+                            title={
+                              kw.currentPosition > 0
+                                ? `Rank #${kw.currentPosition.toFixed(1)}`
+                                : 'Not ranked in top 50 or not synced yet'
+                            }
+                          >
+                            {kw.currentPosition > 0
+                              ? `#${kw.currentPosition.toFixed(1)}`
+                              : kw.sourceType === 'unverified'
+                              ? 'Unretrieved'
+                              : 'Not Ranked'}
                           </span>
                           {delta !== 0 && (
                             <span

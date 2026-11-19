@@ -49,7 +49,7 @@ export function SearchConsoleView({
   onOptimizeUrl,
   onTrackKeyword,
 }: SearchConsoleViewProps) {
-  const { isDemoMode, gscAccessToken, connectGoogleSearchConsole, clearGscToken } = useAuth();
+  const { gscAccessToken, connectGoogleSearchConsole, clearGscToken } = useAuth();
   const { toast } = useToast();
 
   const activeSite =
@@ -62,7 +62,7 @@ export function SearchConsoleView({
   const [days, setDays] = useState<7 | 28 | 90>(28);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tableTab, setTableTab] = useState<'queries' | 'opportunities' | 'pages'>('queries');
+  const [tableTab, setTableTab] = useState<'queries' | 'opportunities' | 'pages' | 'countries' | 'devices'>('queries');
 
   // URL Indexing Inspection
   const [inspectUrl, setInspectUrl] = useState('');
@@ -87,7 +87,7 @@ export function SearchConsoleView({
 
   // Auto-load verified Search Console properties when OAuth token is present
   useEffect(() => {
-    if (!gscAccessToken || isDemoMode) return;
+    if (!gscAccessToken) return;
     let cancelled = false;
     (async () => {
       try {
@@ -97,13 +97,13 @@ export function SearchConsoleView({
         });
         if (!cancelled && Array.isArray(data.siteEntry)) {
           setGscSites(data.siteEntry);
-          if (data.siteEntry[0]?.siteUrl && !selectedProperty) {
+          if (data.siteEntry[0]?.siteUrl) {
             const domainMatch = activeSite
               ? data.siteEntry.find((s: GscSiteEntry) =>
                   s.siteUrl.toLowerCase().includes(activeSite.domain.toLowerCase())
                 )
               : undefined;
-            setSelectedProperty(domainMatch?.siteUrl || data.siteEntry[0].siteUrl);
+            setSelectedProperty((prev) => prev || domainMatch?.siteUrl || data.siteEntry![0].siteUrl);
           }
         }
       } catch (err) {
@@ -115,7 +115,7 @@ export function SearchConsoleView({
     return () => {
       cancelled = true;
     };
-  }, [gscAccessToken, isDemoMode, activeSite, clearGscToken, selectedProperty]);
+  }, [gscAccessToken, activeSite, clearGscToken]);
 
   if (!activeSite) {
     return (
@@ -130,14 +130,6 @@ export function SearchConsoleView({
 
   const handleConnectGoogle = async () => {
     setError(null);
-    if (isDemoMode) {
-      toast({
-        title: 'Demo Mode',
-        description: 'Sign in with your Google/Firebase account to run live Google Search Console OAuth.',
-        variant: 'info',
-      });
-      return;
-    }
     setConnectingOauth(true);
     try {
       await connectGoogleSearchConsole();
@@ -471,16 +463,18 @@ export function SearchConsoleView({
                 <BarChart2 className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
                 <h3 className="font-display text-sm font-semibold">Search Performance Breakdown</h3>
               </div>
-              <div className="flex gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
                 {[
                   { id: 'queries', label: `Top Queries (${latestSnapshot.topQueries.length})` },
-                  { id: 'opportunities', label: `Ranking Opportunities (${lowCtrOpportunities.length})` },
-                  { id: 'pages', label: `Pages & Deltas (${latestSnapshot.topPages.length})` },
+                  { id: 'opportunities', label: `Opportunities (${lowCtrOpportunities.length})` },
+                  { id: 'pages', label: `Pages (${latestSnapshot.topPages.length})` },
+                  { id: 'countries', label: `Countries (${latestSnapshot.topCountries?.length || 0})` },
+                  { id: 'devices', label: `Devices (${latestSnapshot.topDevices?.length || 0})` },
                 ].map((t) => (
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => setTableTab(t.id as 'queries' | 'opportunities' | 'pages')}
+                    onClick={() => setTableTab(t.id as 'queries' | 'opportunities' | 'pages' | 'countries' | 'devices')}
                     className={`rounded-md px-3 py-1.5 text-xs font-medium ${
                       tableTab === t.id
                         ? 'bg-indigo-600 text-white'
@@ -493,7 +487,77 @@ export function SearchConsoleView({
               </div>
             </div>
 
-            {tableTab !== 'pages' ? (
+            {tableTab === 'countries' ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
+                    <tr>
+                      <th className="px-4 py-2.5 font-medium">Country</th>
+                      <th className="px-4 py-2.5 font-medium text-right">Clicks</th>
+                      <th className="px-4 py-2.5 font-medium text-right">Impressions</th>
+                      <th className="px-4 py-2.5 font-medium text-right">CTR</th>
+                      <th className="px-4 py-2.5 font-medium text-right">Avg Position</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {(latestSnapshot.topCountries || []).length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                          Re-sync Search Console above to pull country-level breakdowns.
+                        </td>
+                      </tr>
+                    ) : (
+                      (latestSnapshot.topCountries || []).map((row) => (
+                        <tr key={row.country} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="px-4 py-3 font-medium font-mono">{row.country}</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums">{row.clicks.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums">{row.impressions.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums">{row.ctr.toFixed(2)}%</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums font-semibold">
+                            #{row.position.toFixed(1)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : tableTab === 'devices' ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
+                    <tr>
+                      <th className="px-4 py-2.5 font-medium">Device</th>
+                      <th className="px-4 py-2.5 font-medium text-right">Clicks</th>
+                      <th className="px-4 py-2.5 font-medium text-right">Impressions</th>
+                      <th className="px-4 py-2.5 font-medium text-right">CTR</th>
+                      <th className="px-4 py-2.5 font-medium text-right">Avg Position</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {(latestSnapshot.topDevices || []).length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                          Re-sync Search Console above to pull Desktop / Mobile / Tablet breakdowns.
+                        </td>
+                      </tr>
+                    ) : (
+                      (latestSnapshot.topDevices || []).map((row) => (
+                        <tr key={row.device} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="px-4 py-3 font-medium font-mono">{row.device}</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums">{row.clicks.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums">{row.impressions.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums">{row.ctr.toFixed(2)}%</td>
+                          <td className="px-4 py-3 text-right font-mono tabular-nums font-semibold">
+                            #{row.position.toFixed(1)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : tableTab !== 'pages' ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="border-b border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">

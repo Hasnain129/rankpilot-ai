@@ -386,7 +386,17 @@ export async function fsWriteSyncLog(
   auth: VerifiedFirebaseAuth,
   input: {
     websiteId: string;
-    channel: 'wordpress' | 'woocommerce' | 'gsc' | 'rank_tracker' | 'crawler' | 'pagespeed';
+    channel:
+      | 'wordpress'
+      | 'woocommerce'
+      | 'gsc'
+      | 'ga4'
+      | 'rank_tracker'
+      | 'crawler'
+      | 'pagespeed'
+      | 'competitors'
+      | 'backlinks'
+      | 'recommendations';
     action: string;
     status: 'success' | 'error' | 'warning';
     detail: string;

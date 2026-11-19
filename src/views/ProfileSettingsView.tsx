@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
 export function ProfileSettingsView() {
-  const { user, profile, isDemoMode, updateUserProfile, sendResetPassword } = useAuth();
+  const { user, profile, updateUserProfile, sendResetPassword } = useAuth();
   const { toast } = useToast();
 
   const [displayName, setDisplayName] = useState(profile?.displayName || '');
@@ -115,15 +115,15 @@ export function ProfileSettingsView() {
             <h3 className="font-display text-sm font-semibold">Account Security &amp; Isolation</h3>
           </div>
           <StatusText
-            label={isDemoMode ? 'Demo Workspace' : user?.emailVerified ? 'Verified Account' : 'Email Unverified'}
-            tone={isDemoMode ? 'warning' : user?.emailVerified ? 'success' : 'danger'}
+            label={user?.emailVerified ? 'Verified Account' : 'Email Unverified'}
+            tone={user?.emailVerified ? 'success' : 'danger'}
           />
         </div>
         <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-          All websites, SEO audits, leads, quotes, and orders are strictly isolated by your Firebase UID (<code className="font-mono">{profile?.uid || 'demo_user'}</code>) via Cloud Firestore security rules.
+          All websites, SEO audits, keyword research, rankings, analytics snapshots, and recommendations are strictly isolated by your Firebase UID (<code className="font-mono">{profile?.uid || user?.uid || '—'}</code>) via Cloud Firestore security rules.
         </p>
 
-        {!isDemoMode && user?.providerData?.some((p) => p.providerId === 'password') && (
+        {user?.providerData?.some((p) => p.providerId === 'password') && (
           <button
             type="button"
             onClick={handlePasswordReset}

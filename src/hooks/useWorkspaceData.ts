@@ -12,51 +12,21 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import {
-  DEMO_AUDITS,
-  DEMO_CONTENT,
-  DEMO_GSC_SNAPSHOTS,
-  DEMO_INTEGRATIONS,
-  DEMO_KEYWORDS,
-  DEMO_LEADS,
-  DEMO_OPTIMIZATIONS,
-  DEMO_ORDERS,
-  DEMO_QUOTES,
-  DEMO_SITE_CRAWLS,
-  DEMO_SYNC_LOGS,
-  DEMO_TECHNICAL_SNAPSHOTS,
-  DEMO_TRACKED_KEYWORDS,
-  DEMO_VISITOR_EVENTS,
-  DEMO_WEBSITES,
-  DEMO_WP_CONNECTIONS,
-  DEMO_WP_ENTITIES,
-} from '../lib/demoData';
 import { OperationType, db, handleFirestoreError } from '../lib/firebase';
 import {
-  ContentType,
-  GeneratedContent,
+  AiSeoRecommendation,
+  AnalyticsSnapshot,
   GscSnapshot,
-  IntegrationConfig,
-  IntegrationProvider,
   KeywordAssignment,
   KeywordProject,
-  Lead,
-  LeadSource,
-  LeadStatus,
   OptimizationDraftFields,
-  Order,
-  OrderChannel,
-  OrderEntrySource,
-  OrderStatus,
-  Quote,
-  QuoteStatus,
+  RecommendationStatus,
   SeoAudit,
   SeoOptimization,
   SiteCrawl,
   SyncLog,
   TechnicalSnapshot,
   TrackedKeyword,
-  VisitorEvent,
   Website,
   WpConnection,
   WpEntity,
@@ -86,7 +56,7 @@ function sortDesc<T extends { createdAt?: unknown }>(items: T[]): T[] {
 }
 
 export function useWorkspaceData() {
-  const { user, authReady, isDemoMode } = useAuth();
+  const { user, authReady } = useAuth();
 
   const [websites, setWebsites] = useState<Website[]>([]);
   const [seoAudits, setSeoAudits] = useState<SeoAudit[]>([]);
@@ -99,39 +69,12 @@ export function useWorkspaceData() {
   const [technicalSnapshots, setTechnicalSnapshots] = useState<TechnicalSnapshot[]>([]);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [keywordProjects, setKeywordProjects] = useState<KeywordProject[]>([]);
-  const [generatedContents, setGeneratedContents] = useState<GeneratedContent[]>([]);
-  const [visitorEvents, setVisitorEvents] = useState<VisitorEvent[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [quotes, setQuotes] = useState<Quote[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [integrations, setIntegrations] = useState<IntegrationConfig[]>([]);
+  const [seoRecommendations, setSeoRecommendations] = useState<AiSeoRecommendation[]>([]);
+  const [analyticsSnapshots, setAnalyticsSnapshots] = useState<AnalyticsSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isDemoMode) {
-      setWebsites(DEMO_WEBSITES);
-      setSeoAudits(DEMO_AUDITS);
-      setSiteCrawls(DEMO_SITE_CRAWLS);
-      setWpConnections(DEMO_WP_CONNECTIONS);
-      setWpEntities(DEMO_WP_ENTITIES);
-      setSeoOptimizations(DEMO_OPTIMIZATIONS);
-      setGscSnapshots(DEMO_GSC_SNAPSHOTS);
-      setTrackedKeywords(DEMO_TRACKED_KEYWORDS);
-      setTechnicalSnapshots(DEMO_TECHNICAL_SNAPSHOTS);
-      setSyncLogs(DEMO_SYNC_LOGS);
-      setKeywordProjects(DEMO_KEYWORDS);
-      setGeneratedContents(DEMO_CONTENT);
-      setVisitorEvents(DEMO_VISITOR_EVENTS);
-      setLeads(DEMO_LEADS);
-      setQuotes(DEMO_QUOTES);
-      setOrders(DEMO_ORDERS);
-      setIntegrations(DEMO_INTEGRATIONS);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-
     if (!authReady) return;
     if (!user) {
       setWebsites([]);
@@ -145,12 +88,8 @@ export function useWorkspaceData() {
       setTechnicalSnapshots([]);
       setSyncLogs([]);
       setKeywordProjects([]);
-      setGeneratedContents([]);
-      setVisitorEvents([]);
-      setLeads([]);
-      setQuotes([]);
-      setOrders([]);
-      setIntegrations([]);
+      setSeoRecommendations([]);
+      setAnalyticsSnapshots([]);
       setLoading(false);
       return;
     }
@@ -160,7 +99,7 @@ export function useWorkspaceData() {
 
     const uid = user.uid;
     let settledCount = 0;
-    const totalListeners = 17;
+    const totalListeners = 13;
     const markSettled = () => {
       settledCount++;
       if (settledCount >= totalListeners) setLoading(false);
@@ -203,27 +142,22 @@ export function useWorkspaceData() {
       listen<TechnicalSnapshot>('technicalSnapshots', setTechnicalSnapshots),
       listen<SyncLog>('syncLogs', setSyncLogs),
       listen<KeywordProject>('keywordProjects', setKeywordProjects),
-      listen<GeneratedContent>('generatedContents', setGeneratedContents),
-      listen<VisitorEvent>('visitorEvents', setVisitorEvents),
-      listen<Lead>('leads', setLeads),
-      listen<Quote>('quotes', setQuotes),
-      listen<Order>('orders', setOrders),
-      listen<IntegrationConfig>('integrations', setIntegrations),
+      listen<AiSeoRecommendation>('seoRecommendations', setSeoRecommendations),
+      listen<AnalyticsSnapshot>('analyticsSnapshots', setAnalyticsSnapshots),
     ];
 
     return () => {
       unsubs.forEach((unsub) => unsub());
     };
-  }, [user, authReady, isDemoMode]);
+  }, [user, authReady]);
 
   const ensureWriteAllowed = useCallback(() => {
-    if (isDemoMode) return 'demo_user';
     if (!user) throw new Error('Please sign in to save changes.');
     if (!user.emailVerified) {
       throw new Error('Please verify your email address before saving data to Firestore.');
     }
     return user.uid;
-  }, [isDemoMode, user]);
+  }, [user]);
 
   // Websites
   const addWebsite = useCallback(
@@ -244,15 +178,9 @@ export function useWorkspaceData() {
         seoScore: 0,
         pagesScanned: 0,
         status: 'active' as const,
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
-
-      if (isDemoMode) {
-        const created: Website = { id: websiteId, ...websitePayload };
-        setWebsites((prev) => [created, ...prev]);
-        return created;
-      }
 
       try {
         const batch = writeBatch(db);
@@ -270,7 +198,7 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.WRITE, `websites/${websiteId}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   const updateWebsite = useCallback(
@@ -294,11 +222,6 @@ export function useWorkspaceData() {
         cleanPayload.domain = nextDomain;
       }
 
-      if (isDemoMode) {
-        setWebsites((prev) => prev.map((w) => (w.id === website.id ? { ...w, ...cleanPayload } : w)));
-        return;
-      }
-
       try {
         const batch = writeBatch(db);
         batch.update(doc(db, 'websites', website.id), { ...cleanPayload, updatedAt: serverTimestamp() });
@@ -310,16 +233,12 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.UPDATE, `websites/${website.id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   const deleteWebsite = useCallback(
     async (website: Website) => {
       ensureWriteAllowed();
-      if (isDemoMode) {
-        setWebsites((prev) => prev.filter((w) => w.id !== website.id));
-        return;
-      }
       try {
         const batch = writeBatch(db);
         batch.delete(doc(db, 'websites', website.id));
@@ -329,7 +248,7 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.DELETE, `websites/${website.id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   // SEO Audits
@@ -360,23 +279,15 @@ export function useWorkspaceData() {
         hasCanonical: Boolean(audit.hasCanonical),
         hasOpenGraph: Boolean(audit.hasOpenGraph),
         mobileFriendly: Boolean(audit.mobileFriendly),
+        redirectChain: (audit.redirectChain || []).slice(0, 10),
+        redirectCount: Math.max(0, Math.min(20, Math.round(audit.redirectCount || 0))),
+        metaRobots: (audit.metaRobots || '').slice(0, 200),
+        xRobotsTag: (audit.xRobotsTag || '').slice(0, 200),
         issues: (audit.issues || []).slice(0, 30),
         recommendations: (audit.recommendations || []).slice(0, 20),
         summary: (audit.summary || '').slice(0, 2000),
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        createdAt: serverTimestamp(),
       };
-
-      if (isDemoMode) {
-        setSeoAudits((prev) => [{ id: auditId, ...payload }, ...prev]);
-        setWebsites((prev) =>
-          prev.map((w) =>
-            w.id === websiteId
-              ? { ...w, seoScore: payload.score, pagesScanned: w.pagesScanned + 1, lastScannedAt: new Date().toISOString() }
-              : w
-          )
-        );
-        return;
-      }
 
       const existingWeb = websites.find((w) => w.id === websiteId);
       const nextPages = (existingWeb?.pagesScanned || 0) + 1;
@@ -394,10 +305,10 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.WRITE, `seoAudits/${auditId}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode, websites]
+    [ensureWriteAllowed, websites]
   );
 
-  // SEO Optimization Center CRUD (Phase 3)
+  // SEO Optimization Center CRUD
   const createOptimization = useCallback(
     async (input: {
       websiteId: string;
@@ -428,14 +339,9 @@ export function useWorkspaceData() {
         internalLinksSuggested: (input.internalLinksSuggested || []).slice(0, 10),
         faqSchemaJson: (input.faqSchemaJson || '').slice(0, 12000),
         aiNotes: (input.aiNotes || '').slice(0, 2000),
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
-
-      if (isDemoMode) {
-        setSeoOptimizations((prev) => [{ id, ...payload }, ...prev]);
-        return id;
-      }
 
       try {
         await setDoc(doc(db, 'seoOptimizations', id), payload);
@@ -444,7 +350,7 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.CREATE, `seoOptimizations/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   const updateOptimizationDraft = useCallback(
@@ -466,10 +372,6 @@ export function useWorkspaceData() {
       if (updates.faqSchemaJson !== undefined) clean.faqSchemaJson = updates.faqSchemaJson.slice(0, 12000);
       if (updates.aiNotes !== undefined) clean.aiNotes = updates.aiNotes.slice(0, 2000);
 
-      if (isDemoMode) {
-        setSeoOptimizations((prev) => prev.map((o) => (o.id === id ? { ...o, ...clean } : o)));
-        return;
-      }
       try {
         await updateDoc(doc(db, 'seoOptimizations', id), {
           ...clean,
@@ -479,26 +381,22 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.UPDATE, `seoOptimizations/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   const deleteOptimization = useCallback(
     async (id: string) => {
       ensureWriteAllowed();
-      if (isDemoMode) {
-        setSeoOptimizations((prev) => prev.filter((o) => o.id !== id));
-        return;
-      }
       try {
         await deleteDoc(doc(db, 'seoOptimizations', id));
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `seoOptimizations/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
-  // Tracked Keywords (Phase 6)
+  // Tracked Keywords
   const addTrackedKeyword = useCallback(
     async (input: {
       websiteId: string;
@@ -525,13 +423,9 @@ export function useWorkspaceData() {
         clicks: 0,
         impressions: 0,
         history: [],
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
-      if (isDemoMode) {
-        setTrackedKeywords((prev) => [{ id, ...payload }, ...prev]);
-        return id;
-      }
       try {
         await setDoc(doc(db, 'trackedKeywords', id), payload);
         return id;
@@ -539,23 +433,19 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.CREATE, `trackedKeywords/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   const deleteTrackedKeyword = useCallback(
     async (id: string) => {
       ensureWriteAllowed();
-      if (isDemoMode) {
-        setTrackedKeywords((prev) => prev.filter((k) => k.id !== id));
-        return;
-      }
       try {
         await deleteDoc(doc(db, 'trackedKeywords', id));
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `trackedKeywords/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   // Keyword Research
@@ -582,13 +472,9 @@ export function useWorkspaceData() {
         clusters: (project.clusters || []).slice(0, 15),
         contentIdeas: (project.contentIdeas || []).slice(0, 15),
         suggestedTitles: (project.suggestedTitles || []).slice(0, 15),
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
-      if (isDemoMode) {
-        setKeywordProjects((prev) => [{ id, ...payload }, ...prev]);
-        return id;
-      }
       try {
         await setDoc(doc(db, 'keywordProjects', id), payload);
         return id;
@@ -596,7 +482,7 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.CREATE, `keywordProjects/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   const assignKeywordToPage = useCallback(
@@ -609,12 +495,6 @@ export function useWorkspaceData() {
         assignment,
       ].slice(0, 80);
 
-      if (isDemoMode) {
-        setKeywordProjects((prev) =>
-          prev.map((p) => (p.id === projectId ? { ...p, assignments: nextAssignments } : p))
-        );
-        return;
-      }
       try {
         await updateDoc(doc(db, 'keywordProjects', projectId), {
           assignments: nextAssignments,
@@ -624,502 +504,47 @@ export function useWorkspaceData() {
         handleFirestoreError(err, OperationType.UPDATE, `keywordProjects/${projectId}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode, keywordProjects]
+    [ensureWriteAllowed, keywordProjects]
   );
 
   const deleteKeywordProject = useCallback(
     async (id: string) => {
       ensureWriteAllowed();
-      if (isDemoMode) {
-        setKeywordProjects((prev) => prev.filter((k) => k.id !== id));
-        return;
-      }
       try {
         await deleteDoc(doc(db, 'keywordProjects', id));
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `keywordProjects/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
-  // Generated Content
-  const saveGeneratedContent = useCallback(
-    async (input: {
-      websiteId?: string;
-      contentType: ContentType;
-      title: string;
-      targetKeyword?: string;
-      body: string;
-      metaTitle?: string;
-      metaDescription?: string;
-      status: 'draft' | 'published';
-    }): Promise<string> => {
-      const uid = ensureWriteAllowed();
-      const id = makeId('cnt');
-      const payload = {
-        ownerId: uid,
-        websiteId: (input.websiteId || 'all').slice(0, 128),
-        contentType: input.contentType,
-        title: input.title.trim().slice(0, 240) || 'Untitled Asset',
-        targetKeyword: (input.targetKeyword || '').trim().slice(0, 160),
-        body: input.body.slice(0, 25000),
-        metaTitle: (input.metaTitle || '').slice(0, 160),
-        metaDescription: (input.metaDescription || '').slice(0, 320),
-        status: input.status,
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-      };
-      if (isDemoMode) {
-        setGeneratedContents((prev) => [{ id, ...payload }, ...prev]);
-        return id;
-      }
-      try {
-        await setDoc(doc(db, 'generatedContents', id), payload);
-        return id;
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, `generatedContents/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const updateGeneratedContent = useCallback(
-    async (
-      id: string,
-      updates: {
-        title?: string;
-        targetKeyword?: string;
-        body?: string;
-        metaTitle?: string;
-        metaDescription?: string;
-        status?: 'draft' | 'published';
-      }
-    ) => {
+  // AI SEO Recommendations
+  const updateRecommendationStatus = useCallback(
+    async (id: string, status: RecommendationStatus) => {
       ensureWriteAllowed();
-      const cleanUpdates: Record<string, unknown> = {};
-      if (updates.title !== undefined) cleanUpdates.title = updates.title.trim().slice(0, 240) || 'Untitled Asset';
-      if (updates.targetKeyword !== undefined) cleanUpdates.targetKeyword = updates.targetKeyword.trim().slice(0, 160);
-      if (updates.body !== undefined) cleanUpdates.body = updates.body.slice(0, 25000) || ' ';
-      if (updates.metaTitle !== undefined) cleanUpdates.metaTitle = updates.metaTitle.slice(0, 160);
-      if (updates.metaDescription !== undefined) cleanUpdates.metaDescription = updates.metaDescription.slice(0, 320);
-      if (updates.status !== undefined) cleanUpdates.status = updates.status;
-
-      if (isDemoMode) {
-        setGeneratedContents((prev) => prev.map((c) => (c.id === id ? { ...c, ...cleanUpdates } : c)));
-        return;
-      }
       try {
-        await updateDoc(doc(db, 'generatedContents', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
+        await updateDoc(doc(db, 'seoRecommendations', id), {
+          status,
+          updatedAt: serverTimestamp(),
+        });
       } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `generatedContents/${id}`);
+        handleFirestoreError(err, OperationType.UPDATE, `seoRecommendations/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
+    [ensureWriteAllowed]
   );
 
-  const deleteGeneratedContent = useCallback(
+  const deleteRecommendation = useCallback(
     async (id: string) => {
       ensureWriteAllowed();
-      if (isDemoMode) {
-        setGeneratedContents((prev) => prev.filter((c) => c.id !== id));
-        return;
-      }
       try {
-        await deleteDoc(doc(db, 'generatedContents', id));
+        await deleteDoc(doc(db, 'seoRecommendations', id));
       } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `generatedContents/${id}`);
+        handleFirestoreError(err, OperationType.DELETE, `seoRecommendations/${id}`);
       }
     },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const addDemoVisitorEvent = useCallback((evt: Omit<VisitorEvent, 'id' | 'ownerId' | 'createdAt'>) => {
-    const id = makeId('evt');
-    setVisitorEvents((prev) => [
-      { id, ownerId: 'demo_user', ...evt, createdAt: { toMillis: () => Date.now() } },
-      ...prev,
-    ]);
-  }, []);
-
-  // Leads
-  const addLead = useCallback(
-    async (input: {
-      websiteId: string;
-      name: string;
-      email: string;
-      phone?: string;
-      company?: string;
-      leadSource: LeadSource;
-      status: LeadStatus;
-      estimatedValue: number;
-      notes?: string;
-      trackingSource?: 'tracked' | 'manual';
-    }) => {
-      const uid = ensureWriteAllowed();
-      const id = makeId('lead');
-      const payload = {
-        ownerId: uid,
-        websiteId: input.websiteId,
-        name: input.name.trim().slice(0, 140),
-        email: input.email.trim().slice(0, 254),
-        phone: (input.phone || '').trim().slice(0, 40),
-        company: (input.company || '').trim().slice(0, 140),
-        leadSource: input.leadSource,
-        status: input.status,
-        estimatedValue: Math.max(0, Math.min(100000000, Number(input.estimatedValue) || 0)),
-        notes: (input.notes || '').trim().slice(0, 2000),
-        trackingSource: input.trackingSource || ('manual' as const),
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-      };
-      if (isDemoMode) {
-        setLeads((prev) => [{ id, ...payload }, ...prev]);
-        return id;
-      }
-      try {
-        await setDoc(doc(db, 'leads', id), payload);
-        return id;
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, `leads/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const updateLead = useCallback(
-    async (
-      id: string,
-      updates: Partial<{
-        name: string;
-        email: string;
-        phone: string;
-        company: string;
-        leadSource: LeadSource;
-        status: LeadStatus;
-        estimatedValue: number;
-        notes: string;
-      }>
-    ) => {
-      ensureWriteAllowed();
-      const cleanUpdates: Record<string, unknown> = {};
-      if (updates.name !== undefined) cleanUpdates.name = updates.name.trim().slice(0, 140);
-      if (updates.email !== undefined) cleanUpdates.email = updates.email.trim().slice(0, 254);
-      if (updates.phone !== undefined) cleanUpdates.phone = updates.phone.trim().slice(0, 40);
-      if (updates.company !== undefined) cleanUpdates.company = updates.company.trim().slice(0, 140);
-      if (updates.leadSource !== undefined) cleanUpdates.leadSource = updates.leadSource;
-      if (updates.status !== undefined) cleanUpdates.status = updates.status;
-      if (updates.estimatedValue !== undefined) {
-        cleanUpdates.estimatedValue = Math.max(0, Math.min(100000000, Number(updates.estimatedValue) || 0));
-      }
-      if (updates.notes !== undefined) cleanUpdates.notes = updates.notes.trim().slice(0, 2000);
-
-      if (isDemoMode) {
-        setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...cleanUpdates } : l)));
-        return;
-      }
-      try {
-        await updateDoc(doc(db, 'leads', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `leads/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const deleteLead = useCallback(
-    async (id: string) => {
-      ensureWriteAllowed();
-      if (isDemoMode) {
-        setLeads((prev) => prev.filter((l) => l.id !== id));
-        return;
-      }
-      try {
-        await deleteDoc(doc(db, 'leads', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `leads/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  // Quotes
-  const addQuote = useCallback(
-    async (input: {
-      websiteId: string;
-      leadId?: string;
-      customerName: string;
-      customerEmail: string;
-      serviceOrProduct: string;
-      amount: number;
-      currency?: string;
-      status: QuoteStatus;
-      validUntil?: string;
-      notes?: string;
-    }) => {
-      const uid = ensureWriteAllowed();
-      const id = makeId('qt');
-      const payload = {
-        ownerId: uid,
-        websiteId: input.websiteId,
-        leadId: (input.leadId || '').slice(0, 128),
-        customerName: input.customerName.trim().slice(0, 140),
-        customerEmail: input.customerEmail.trim().slice(0, 254),
-        serviceOrProduct: input.serviceOrProduct.trim().slice(0, 240),
-        amount: Math.max(0, Math.min(100000000, Number(input.amount) || 0)),
-        currency: (input.currency || 'USD').slice(0, 6),
-        status: input.status,
-        validUntil: (input.validUntil || '').slice(0, 32),
-        notes: (input.notes || '').trim().slice(0, 2000),
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-      };
-      if (isDemoMode) {
-        setQuotes((prev) => [{ id, ...payload }, ...prev]);
-        return id;
-      }
-      try {
-        await setDoc(doc(db, 'quotes', id), payload);
-        return id;
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, `quotes/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const updateQuote = useCallback(
-    async (
-      id: string,
-      updates: Partial<{
-        customerName: string;
-        customerEmail: string;
-        serviceOrProduct: string;
-        amount: number;
-        currency: string;
-        status: QuoteStatus;
-        validUntil: string;
-        notes: string;
-      }>
-    ) => {
-      ensureWriteAllowed();
-      const cleanUpdates: Record<string, unknown> = {};
-      if (updates.customerName !== undefined) cleanUpdates.customerName = updates.customerName.trim().slice(0, 140);
-      if (updates.customerEmail !== undefined) cleanUpdates.customerEmail = updates.customerEmail.trim().slice(0, 254);
-      if (updates.serviceOrProduct !== undefined) cleanUpdates.serviceOrProduct = updates.serviceOrProduct.trim().slice(0, 240);
-      if (updates.amount !== undefined) {
-        cleanUpdates.amount = Math.max(0, Math.min(100000000, Number(updates.amount) || 0));
-      }
-      if (updates.currency !== undefined) cleanUpdates.currency = updates.currency.slice(0, 6);
-      if (updates.status !== undefined) cleanUpdates.status = updates.status;
-      if (updates.validUntil !== undefined) cleanUpdates.validUntil = updates.validUntil.slice(0, 32);
-      if (updates.notes !== undefined) cleanUpdates.notes = updates.notes.trim().slice(0, 2000);
-
-      if (isDemoMode) {
-        setQuotes((prev) => prev.map((q) => (q.id === id ? { ...q, ...cleanUpdates } : q)));
-        return;
-      }
-      try {
-        await updateDoc(doc(db, 'quotes', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `quotes/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const deleteQuote = useCallback(
-    async (id: string) => {
-      ensureWriteAllowed();
-      if (isDemoMode) {
-        setQuotes((prev) => prev.filter((q) => q.id !== id));
-        return;
-      }
-      try {
-        await deleteDoc(doc(db, 'quotes', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `quotes/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  // Orders
-  const addOrder = useCallback(
-    async (input: {
-      websiteId: string;
-      orderNumber?: string;
-      customerName: string;
-      customerEmail: string;
-      productOrService: string;
-      amount: number;
-      currency?: string;
-      channel: OrderChannel;
-      entrySource: OrderEntrySource;
-      status: OrderStatus;
-      orderDate: string;
-    }) => {
-      const uid = ensureWriteAllowed();
-      const id = makeId('ord');
-      const payload = {
-        ownerId: uid,
-        websiteId: input.websiteId,
-        orderNumber: (input.orderNumber || `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`).slice(0, 64),
-        customerName: input.customerName.trim().slice(0, 140),
-        customerEmail: input.customerEmail.trim().slice(0, 254),
-        productOrService: input.productOrService.trim().slice(0, 240),
-        amount: Math.max(0, Math.min(100000000, Number(input.amount) || 0)),
-        currency: (input.currency || 'USD').slice(0, 6),
-        channel: input.channel,
-        entrySource: input.entrySource,
-        status: input.status,
-        orderDate: input.orderDate.slice(0, 32),
-        createdAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-        updatedAt: isDemoMode ? { toMillis: () => Date.now() } : serverTimestamp(),
-      };
-      if (isDemoMode) {
-        setOrders((prev) => [{ id, ...payload }, ...prev]);
-        return id;
-      }
-      try {
-        await setDoc(doc(db, 'orders', id), payload);
-        return id;
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, `orders/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const updateOrder = useCallback(
-    async (
-      id: string,
-      updates: Partial<{
-        orderNumber: string;
-        customerName: string;
-        customerEmail: string;
-        productOrService: string;
-        amount: number;
-        currency: string;
-        channel: OrderChannel;
-        status: OrderStatus;
-        orderDate: string;
-      }>
-    ) => {
-      ensureWriteAllowed();
-      const cleanUpdates: Record<string, unknown> = {};
-      if (updates.orderNumber !== undefined) cleanUpdates.orderNumber = updates.orderNumber.trim().slice(0, 64);
-      if (updates.customerName !== undefined) cleanUpdates.customerName = updates.customerName.trim().slice(0, 140);
-      if (updates.customerEmail !== undefined) cleanUpdates.customerEmail = updates.customerEmail.trim().slice(0, 254);
-      if (updates.productOrService !== undefined) cleanUpdates.productOrService = updates.productOrService.trim().slice(0, 240);
-      if (updates.amount !== undefined) {
-        cleanUpdates.amount = Math.max(0, Math.min(100000000, Number(updates.amount) || 0));
-      }
-      if (updates.currency !== undefined) cleanUpdates.currency = updates.currency.slice(0, 6);
-      if (updates.channel !== undefined) cleanUpdates.channel = updates.channel;
-      if (updates.status !== undefined) cleanUpdates.status = updates.status;
-      if (updates.orderDate !== undefined) cleanUpdates.orderDate = updates.orderDate.slice(0, 32);
-
-      if (isDemoMode) {
-        setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...cleanUpdates } : o)));
-        return;
-      }
-      try {
-        await updateDoc(doc(db, 'orders', id), { ...cleanUpdates, updatedAt: serverTimestamp() });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `orders/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  const deleteOrder = useCallback(
-    async (id: string) => {
-      ensureWriteAllowed();
-      if (isDemoMode) {
-        setOrders((prev) => prev.filter((o) => o.id !== id));
-        return;
-      }
-      try {
-        await deleteDoc(doc(db, 'orders', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `orders/${id}`);
-      }
-    },
-    [ensureWriteAllowed, isDemoMode]
-  );
-
-  // Integrations
-  const saveIntegrationConfig = useCallback(
-    async (input: {
-      websiteId: string;
-      provider: IntegrationProvider;
-      status: 'not_connected' | 'configured';
-      identifier?: string;
-      notes?: string;
-    }) => {
-      const uid = ensureWriteAllowed();
-      const existing = integrations.find(
-        (i) => i.websiteId === input.websiteId && i.provider === input.provider
-      );
-      if (isDemoMode) {
-        if (existing) {
-          setIntegrations((prev) =>
-            prev.map((i) =>
-              i.id === existing.id
-                ? { ...i, status: input.status, identifier: input.identifier, notes: input.notes }
-                : i
-            )
-          );
-        } else {
-          setIntegrations((prev) => [
-            {
-              id: makeId('int'),
-              ownerId: uid,
-              websiteId: input.websiteId,
-              provider: input.provider,
-              status: input.status,
-              identifier: input.identifier,
-              notes: input.notes,
-              createdAt: { toMillis: () => Date.now() },
-              updatedAt: { toMillis: () => Date.now() },
-            },
-            ...prev,
-          ]);
-        }
-        return;
-      }
-
-      if (existing) {
-        try {
-          await updateDoc(doc(db, 'integrations', existing.id), {
-            status: input.status,
-            identifier: (input.identifier || '').trim().slice(0, 254),
-            notes: (input.notes || '').trim().slice(0, 500),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `integrations/${existing.id}`);
-        }
-      } else {
-        const id = makeId('int');
-        try {
-          await setDoc(doc(db, 'integrations', id), {
-            ownerId: uid,
-            websiteId: input.websiteId,
-            provider: input.provider,
-            status: input.status,
-            identifier: (input.identifier || '').trim().slice(0, 254),
-            notes: (input.notes || '').trim().slice(0, 500),
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.CREATE, `integrations/${id}`);
-        }
-      }
-    },
-    [ensureWriteAllowed, integrations, isDemoMode]
+    [ensureWriteAllowed]
   );
 
   return {
@@ -1134,12 +559,8 @@ export function useWorkspaceData() {
     technicalSnapshots,
     syncLogs,
     keywordProjects,
-    generatedContents,
-    visitorEvents,
-    leads,
-    quotes,
-    orders,
-    integrations,
+    seoRecommendations,
+    analyticsSnapshots,
     loading,
     error,
     addWebsite,
@@ -1154,19 +575,7 @@ export function useWorkspaceData() {
     saveKeywordProject,
     assignKeywordToPage,
     deleteKeywordProject,
-    saveGeneratedContent,
-    updateGeneratedContent,
-    deleteGeneratedContent,
-    addDemoVisitorEvent,
-    addLead,
-    updateLead,
-    deleteLead,
-    addQuote,
-    updateQuote,
-    deleteQuote,
-    addOrder,
-    updateOrder,
-    deleteOrder,
-    saveIntegrationConfig,
+    updateRecommendationStatus,
+    deleteRecommendation,
   };
 }
