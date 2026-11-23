@@ -8,11 +8,11 @@ import { firebaseConfigSummary } from '../lib/firebase';
 export function AuthView() {
   const {
     signInWithGoogle,
-    signInWithGoogleRedirect,
     signInWithEmail,
     signUpWithEmail,
     sendResetPassword,
     authRedirectError,
+    googleRedirectPending,
     clearAuthRedirectError,
   } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -74,33 +74,18 @@ export function AuthView() {
   };
 
   const handleGoogle = async () => {
+    if (submitting || googleRedirectPending) return;
     clearError();
-    setSubmitting(true);
     try {
       await signInWithGoogle();
-      toast({ title: 'Signed in with Google', variant: 'success' });
     } catch (err) {
       const f = err as FormattedAuthError;
       setErrorMsg(f instanceof Error ? f.message : 'Google sign-in failed.');
       setErrorCode(f?.code || null);
-    } finally {
-      setSubmitting(false);
     }
   };
 
-  const handleGoogleRedirect = async () => {
-    clearError();
-    setSubmitting(true);
-    try {
-      await signInWithGoogleRedirect();
-    } catch (err) {
-      const f = err as FormattedAuthError;
-      setErrorMsg(f instanceof Error ? f.message : 'Google redirect sign-in failed.');
-      setErrorCode(f?.code || null);
-      setSubmitting(false);
-    }
-  };
-
+  const isGooglePending = submitting || googleRedirectPending;
   const currentHostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
   return (
@@ -184,7 +169,7 @@ export function AuthView() {
                 <button
                   type="button"
                   onClick={handleGoogle}
-                  disabled={submitting}
+                  disabled={isGooglePending}
                   className="flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
                 >
                   <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
@@ -193,7 +178,7 @@ export function AuthView() {
                     <path fill="#FBBC05" d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z" />
                     <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z" />
                   </svg>
-                  <span>Continue with Google</span>
+                  <span>{googleRedirectPending ? 'Redirecting to Google...' : 'Continue with Google'}</span>
                 </button>
 
                 <div className="my-5 flex items-center gap-3">
@@ -215,31 +200,21 @@ export function AuthView() {
                     <div>Auth Handler: {firebaseConfigSummary.authDomain}</div>
                   </div>
                 )}
-                {(errorCode === 'auth/popup-closed-by-user' ||
+                {(errorCode === 'auth/redirect-cancelled-by-user' ||
+                  errorCode === 'auth/redirect-operation-pending' ||
                   errorCode === 'auth/user-cancelled' ||
                   errorCode === 'auth/internal-error' ||
-                  errorCode === 'auth/web-storage-unsupported') && (
+                  errorCode === 'auth/web-storage-unsupported' ||
+                  errorCode === 'auth/operation-not-supported-in-this-environment') && (
                   <div className="border-t border-red-200 pt-2 font-mono text-[11px] text-red-800 dark:border-red-900/50 dark:text-red-200 space-y-0.5">
                     <div>Error Code: {errorCode}</div>
                     <div>Firebase Project: {firebaseConfigSummary.projectId}</div>
+                    <div>Auth Handler: {firebaseConfigSummary.authDomain}</div>
                     {firebaseConfigSummary.oAuthClientId && (
                       <div className="truncate">OAuth Client: {firebaseConfigSummary.oAuthClientId}</div>
                     )}
                   </div>
                 )}
-                {(errorCode === 'auth/popup-blocked' ||
-                  errorCode === 'auth/popup-closed-by-user' ||
-                  errorCode === 'auth/web-storage-unsupported') &&
-                  typeof window !== 'undefined' &&
-                  window.top === window.self && (
-                    <button
-                      type="button"
-                      onClick={handleGoogleRedirect}
-                      className="inline-block font-semibold text-indigo-700 underline dark:text-indigo-300"
-                    >
-                      Try Google Redirect Sign-In instead
-                    </button>
-                  )}
               </div>
             )}
 

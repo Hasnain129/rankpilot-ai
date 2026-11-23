@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import {
   GoogleAuthProvider,
   User,
+  UserCredential,
   createUserWithEmailAndPassword,
   getRedirectResult,
   onAuthStateChanged,
@@ -38,6 +39,7 @@ interface AuthContextValue {
   gscAccessToken: string | null;
   ga4AccessToken: string | null;
   authRedirectError: FormattedAuthError | null;
+  googleRedirectPending: boolean;
   clearAuthRedirectError: () => void;
   connectGoogleSearchConsole: () => Promise<string>;
   clearGscToken: () => void;
@@ -55,6 +57,73 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+const GOOGLE_REDIRECT_LOCK_KEY = 'rp_google_redirect_pending_at';
+const GOOGLE_REDIRECT_LOCK_TTL_MS = 30_000;
+
+let redirectResultPromise: Promise<UserCredential | null> | null = null;
+
+function consumeRedirectResultOnce(): Promise<UserCredential | null> {
+  if (!redirectResultPromise) {
+    redirectResultPromise = getRedirectResult(auth);
+  }
+  return redirectResultPromise;
+}
+
+function isRedirectLockActive(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.sessionStorage.getItem(GOOGLE_REDIRECT_LOCK_KEY);
+    if (!raw) return false;
+    const ts = Number(raw);
+    if (!Number.isFinite(ts) || Date.now() - ts > GOOGLE_REDIRECT_LOCK_TTL_MS) {
+      window.sessionStorage.removeItem(GOOGLE_REDIRECT_LOCK_KEY);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setRedirectLock(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(GOOGLE_REDIRECT_LOCK_KEY, String(Date.now()));
+  } catch {
+    // Ignore storage restriction errors
+  }
+}
+
+function clearRedirectLock(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(GOOGLE_REDIRECT_LOCK_KEY);
+  } catch {
+    // Ignore storage restriction errors
+  }
+}
+
+function cleanOAuthErrorParamsFromUrl(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    let changed = false;
+    if (url.searchParams.has('error')) {
+      url.searchParams.delete('error');
+      changed = true;
+    }
+    if (url.searchParams.has('error_description')) {
+      url.searchParams.delete('error_description');
+      changed = true;
+    }
+    if (changed) {
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    }
+  } catch {
+    // Ignore history API errors
+  }
+}
 
 function makeAuthError(message: string, code?: string): FormattedAuthError {
   const err = new Error(message) as FormattedAuthError;
@@ -74,11 +143,13 @@ function extractFirebaseCustomDetail(err: unknown): string {
       : null
   ) as Record<string, unknown> | null;
 
-  const detail =
+  const rawDetail =
     (typeof tokenResp?.errorMessage === 'string' && tokenResp.errorMessage) ||
+    (typeof custom?.errorMessage === 'string' && custom.errorMessage) ||
     (typeof custom?.message === 'string' && custom.message) ||
+    (typeof rec.message === 'string' && rec.message) ||
     '';
-  return detail.trim();
+  return rawDetail.replace(/^Firebase:\s*Error\s*\(auth\/[^)]+\)\.?/i, '').trim();
 }
 
 function formatOAuthUrlError(): FormattedAuthError | null {
@@ -127,19 +198,31 @@ function formatAuthError(err: unknown): FormattedAuthError {
     }
     if (code === 'auth/popup-blocked') {
       return makeAuthError(
-        'Browser blocked the Google sign-in popup window. Allow popups for this site or use Redirect Sign-In below.',
+        'Browser blocked the Google authorization popup window. Allow popups for this site and try again.',
         code
       );
     }
     if (code === 'auth/cancelled-popup-request') {
       return makeAuthError(
-        'A Google sign-in popup is already open or was interrupted by another click. Complete or close the open popup and try again.',
+        'A Google authorization popup is already open or was interrupted by another click. Complete or close the open popup and try again.',
         code
       );
     }
     if (code === 'auth/popup-closed-by-user') {
       return makeAuthError(
-        `Google sign-in did not complete before the popup closed${customDetail ? ` (${customDetail})` : ''}. If Google displayed an access or verification block (Error 403: access_denied or org_internal) for a personal @gmail.com account, update the OAuth Consent Screen in Google Cloud project "${firebaseConfigSummary.projectId}" to External + Published (or add that email under Test users).`,
+        `Google authorization window was closed before completing consent${customDetail ? ` (${customDetail})` : ''}.`,
+        code
+      );
+    }
+    if (code === 'auth/redirect-cancelled-by-user') {
+      return makeAuthError(
+        `Google sign-in redirect was cancelled before completing authentication${customDetail ? ` (${customDetail})` : ''}. If Google displayed an OAuth access block (for example access_denied or org_internal), verify the OAuth Consent Screen and Test users in Google Cloud project "${firebaseConfigSummary.projectId}".`,
+        code
+      );
+    }
+    if (code === 'auth/redirect-operation-pending') {
+      return makeAuthError(
+        'A Google sign-in redirect is already in progress. Complete the pending sign-in or refresh the page and try again.',
         code
       );
     }
@@ -151,7 +234,14 @@ function formatAuthError(err: unknown): FormattedAuthError {
     }
     if (code === 'auth/web-storage-unsupported') {
       return makeAuthError(
-        'Browser third-party cookies or storage needed for the Firebase Auth popup are blocked. Allow storage for firebaseapp.com or open the app in a standalone tab.',
+        `Browser storage or third-party cookies required by the Firebase Auth redirect handler (${firebaseConfigSummary.authDomain}) are blocked. Allow storage for firebaseapp.com or open the app in a standard browser tab.`,
+        code
+      );
+    }
+    if (code === 'auth/operation-not-supported-in-this-environment') {
+      return makeAuthError(
+        customDetail ||
+          'Google Sign-In redirect is not supported in this embedded context or storage mode. Open RankPilot AI in a top-level browser tab with cookies/storage enabled.',
         code
       );
     }
@@ -190,7 +280,7 @@ function formatAuthError(err: unknown): FormattedAuthError {
     }
     if (code === 'auth/internal-error') {
       return makeAuthError(
-        `Firebase Authentication encountered an OAuth configuration error${customDetail ? `: ${customDetail}` : ''}. Check Google Sign-In provider and OAuth Consent Screen settings in project "${firebaseConfigSummary.projectId}".`,
+        `Firebase Authentication encountered an OAuth redirect error${customDetail ? `: ${customDetail}` : ''}. Check Google Sign-In provider, authorized redirect URI (${firebaseConfigSummary.authDomain}/__/auth/handler), and OAuth Consent Screen settings in project "${firebaseConfigSummary.projectId}".`,
         code
       );
     }
@@ -212,35 +302,75 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [gscAccessToken, setGscAccessToken] = useState<string | null>(null);
   const [ga4AccessToken, setGa4AccessToken] = useState<string | null>(null);
   const [authRedirectError, setAuthRedirectError] = useState<FormattedAuthError | null>(null);
+  const [googleRedirectPending, setGoogleRedirectPending] = useState<boolean>(() => isRedirectLockActive());
   const googleAuthInFlightRef = useRef(false);
 
   useEffect(() => {
-    testFirestoreConnection().then(setFirestoreConnected);
+    let active = true;
+    let initialAuthResolved = false;
+    let redirectResolved = false;
+
+    const maybeMarkReady = () => {
+      if (active && initialAuthResolved && redirectResolved) {
+        setAuthReady(true);
+      }
+    };
+
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        googleAuthInFlightRef.current = false;
+        setGoogleRedirectPending(false);
+        clearRedirectLock();
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+
+    testFirestoreConnection().then((ok) => {
+      if (active) setFirestoreConnected(ok);
+    });
 
     const urlOAuthErr = formatOAuthUrlError();
-    if (urlOAuthErr) {
-      setAuthRedirectError(urlOAuthErr);
-    }
 
-    getRedirectResult(auth)
+    consumeRedirectResultOnce()
       .then((result) => {
-        if (result) {
-          const cred = GoogleAuthProvider.credentialFromResult(result);
-          if (cred?.accessToken) {
-            setGscAccessToken(cred.accessToken);
-          }
+        if (!active) return;
+        if (result?.user) {
+          setAuthRedirectError(null);
+        } else if (urlOAuthErr) {
+          setAuthRedirectError(urlOAuthErr);
         }
       })
       .catch((err) => {
-        setAuthRedirectError(formatAuthError(err));
+        if (!active) return;
+        const formatted = formatAuthError(err);
+        if (urlOAuthErr && (!formatted.message || formatted.code === 'auth/internal-error')) {
+          setAuthRedirectError(
+            makeAuthError(
+              `${urlOAuthErr.message}${formatted.message ? ` (${formatted.message})` : ''}`,
+              formatted.code
+            )
+          );
+        } else {
+          setAuthRedirectError(formatted);
+        }
+      })
+      .finally(() => {
+        redirectResolved = true;
+        googleAuthInFlightRef.current = false;
+        if (active) setGoogleRedirectPending(false);
+        clearRedirectLock();
+        cleanOAuthErrorParamsFromUrl();
+        maybeMarkReady();
       });
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!active) return;
       setUser(firebaseUser);
       if (firebaseUser) {
         const profilePath = `users/${firebaseUser.uid}`;
         try {
           const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (!active) return;
           if (snap.exists()) {
             setProfile(snap.data() as UserProfile);
           } else {
@@ -260,18 +390,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               updatedAt: serverTimestamp(),
             };
             await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-            setProfile(newProfile);
+            if (active) setProfile(newProfile);
           }
         } catch (err) {
           console.error('Failed loading user profile:', err);
-          setProfile({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || '',
-            displayName: firebaseUser.displayName || 'Account User',
-            companyName: '',
-            role: 'member',
-            plan: 'free',
-          });
+          if (active) {
+            setProfile({
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              displayName: firebaseUser.displayName || 'Account User',
+              companyName: '',
+              role: 'member',
+              plan: 'free',
+            });
+          }
           if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
             handleFirestoreError(err, OperationType.GET, profilePath);
           }
@@ -281,10 +413,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setGscAccessToken(null);
         setGa4AccessToken(null);
       }
-      setAuthReady(true);
+      initialAuthResolved = true;
+      maybeMarkReady();
     });
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      window.removeEventListener('pageshow', handlePageShow);
+      unsubscribe();
+    };
   }, []);
 
   const connectGoogleSearchConsole = async (): Promise<string> => {
@@ -347,35 +484,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearGa4Token = () => setGa4AccessToken(null);
 
-  const signInWithGoogle = async () => {
-    if (googleAuthInFlightRef.current) return;
-    googleAuthInFlightRef.current = true;
-    setAuthRedirectError(null);
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      const formatted = formatAuthError(err);
-      if (
-        formatted.code === 'auth/popup-blocked' &&
-        typeof window !== 'undefined' &&
-        window.top === window.self
-      ) {
-        await signInWithRedirect(auth, googleProvider);
-        return;
-      }
-      throw formatted;
-    } finally {
-      googleAuthInFlightRef.current = false;
+  const triggerGoogleRedirectSignIn = async () => {
+    if (!authReady || googleAuthInFlightRef.current || isRedirectLockActive()) {
+      return;
     }
-  };
+    if (typeof window !== 'undefined' && window.top !== window.self) {
+      const iframeErr = makeAuthError(
+        'Google Sign-In redirect cannot run inside an embedded frame because Google blocks accounts.google.com inside iframes. Open this RankPilot AI URL in a top-level browser tab and click "Continue with Google".',
+        'auth/operation-not-supported-in-this-environment'
+      );
+      setAuthRedirectError(iframeErr);
+      throw iframeErr;
+    }
 
-  const signInWithGoogleRedirect = async () => {
+    googleAuthInFlightRef.current = true;
+    setGoogleRedirectPending(true);
     setAuthRedirectError(null);
+    setRedirectLock();
     try {
       await signInWithRedirect(auth, googleProvider);
     } catch (err) {
-      throw formatAuthError(err);
+      googleAuthInFlightRef.current = false;
+      setGoogleRedirectPending(false);
+      clearRedirectLock();
+      const formatted = formatAuthError(err);
+      setAuthRedirectError(formatted);
+      throw formatted;
     }
+  };
+
+  const signInWithGoogle = async () => {
+    await triggerGoogleRedirectSignIn();
+  };
+
+  const signInWithGoogleRedirect = async () => {
+    await triggerGoogleRedirectSignIn();
   };
 
   const signInWithEmail = async (email: string, password: string) => {
@@ -469,6 +612,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         gscAccessToken,
         ga4AccessToken,
         authRedirectError,
+        googleRedirectPending,
         clearAuthRedirectError: () => setAuthRedirectError(null),
         connectGoogleSearchConsole,
         clearGscToken,
