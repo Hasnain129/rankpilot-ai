@@ -382,6 +382,47 @@ export async function fsDeleteDoc(
   }
 }
 
+export async function fsQueryByOwner<T = Record<string, unknown>>(
+  idToken: string,
+  collectionPath: string,
+  ownerUid: string,
+  limit = 100
+): Promise<Array<T & { id: string }>> {
+  const { rootUrl } = getFirestoreBase();
+  const res = await fetch(`${rootUrl}:runQuery`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: collectionPath }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: 'ownerId' },
+            op: 'EQUAL',
+            value: { stringValue: ownerUid },
+          },
+        },
+        limit,
+      },
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Firestore query failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+  const rows = (await res.json()) as Array<{
+    document?: { name: string; fields?: Record<string, FsValue> };
+  }>;
+  return rows
+    .filter((row): row is { document: { name: string; fields?: Record<string, FsValue> } } =>
+      Boolean(row.document)
+    )
+    .map((row) => decodeFsDocument<T>(row.document));
+}
+
 export async function fsWriteSyncLog(
   auth: VerifiedFirebaseAuth,
   input: {

@@ -4,6 +4,7 @@ import {
   fsCreateDoc,
   fsDeleteDoc,
   fsGetDoc,
+  fsQueryByOwner,
   fsUpdateDoc,
   fsWriteSyncLog,
   getFirebaseConfig,
@@ -13,9 +14,16 @@ import { decryptSecrets, encryptSecrets, hasDedicatedEncryptionKey } from './cry
 import {
   crawlEntireSite,
   inspectPageRaw,
-  inspectRobotsAndSitemap,
   validatePublicHttpUrl,
 } from './crawler.ts';
+import {
+  PSI_CACHE_TTL_MS,
+  PageSpeedApiError,
+  fetchPageSpeedWithCache,
+  getPageSpeedKeyConfig,
+  getPsiQuotaStatus,
+  normalizePsiUrl,
+} from './pagespeed.ts';
 import {
   type DetectedSeoPlugin,
   type WpEntityType,
@@ -138,6 +146,8 @@ export function createApp() {
     } catch {
       firebaseMeta = null;
     }
+    const psiKeyCfg = getPageSpeedKeyConfig();
+    const psiQuota = getPsiQuotaStatus();
     res.json({
       ok: true,
       service: 'RankPilot AI',
@@ -146,7 +156,10 @@ export function createApp() {
       capabilities: {
         geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
         dedicatedVaultKey: hasDedicatedEncryptionKey(),
-        pageSpeedKeyConfigured: Boolean(process.env.GOOGLE_PAGESPEED_API_KEY),
+        pageSpeedKeyConfigured: Boolean(psiKeyCfg.apiKey),
+        pageSpeedKeySource: psiKeyCfg.source,
+        pageSpeedQuotaExhausted: psiQuota.quotaExhausted,
+        pageSpeedQuotaRetryAfter: psiQuota.retryAfter,
         serpApiConfigured: Boolean(process.env.SERP_API_KEY),
       },
       keywordProviders: getKeywordProvidersStatus().map((p) => ({
@@ -2180,127 +2193,109 @@ Requirements:
       }
 
       const parsedUrl = await validatePublicHttpUrl(url);
+      const normalizedUrl = normalizePsiUrl(parsedUrl);
       const cleanStrategy = strategy === 'desktop' ? 'desktop' : 'mobile';
-
-      const psiUrl = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
-      psiUrl.searchParams.set('url', parsedUrl.toString());
-      psiUrl.searchParams.set('strategy', cleanStrategy);
-      ['performance', 'seo', 'accessibility', 'best-practices'].forEach((cat) =>
-        psiUrl.searchParams.append('category', cat)
-      );
-      if (process.env.GOOGLE_PAGESPEED_API_KEY?.trim()) {
-        psiUrl.searchParams.set('key', process.env.GOOGLE_PAGESPEED_API_KEY.trim());
-      }
-
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 25000);
-      let psiRes: Response;
-      try {
-        psiRes = await fetch(psiUrl.toString(), { signal: ctrl.signal });
-      } finally {
-        clearTimeout(timer);
-      }
-
-      const psiJson = await psiRes.json();
-      if (!psiRes.ok) {
-        res.status(psiRes.status).json({
-          error:
-            psiJson?.error?.message ||
-            `PageSpeed Insights API returned HTTP ${psiRes.status}. Configure GOOGLE_PAGESPEED_API_KEY on the server if public rate limit is reached.`,
-        });
-        return;
-      }
-
-      const lh = psiJson?.lighthouseResult || {};
-      const cats = lh.categories || {};
-      const audits = lh.audits || {};
-
-      const scoreOf = (catKey: string) =>
-        Math.trunc(Math.round(((cats[catKey]?.score as number) || 0) * 100));
-      const numAudit = (key: string) => Number(audits[key]?.numericValue || 0);
-
-      const performanceScore = scoreOf('performance');
-      const seoScore = scoreOf('seo');
-      const accessibilityScore = scoreOf('accessibility');
-      const bestPracticesScore = scoreOf('best-practices');
-
-      const lcpMs = Math.round(numAudit('largest-contentful-paint'));
-      const cls = Number(numAudit('cumulative-layout-shift').toFixed(3));
-      const inpMs = Math.round(
-        numAudit('interaction-to-next-paint') || numAudit('max-potential-fid') || 0
-      );
-      const fcpMs = Math.round(numAudit('first-contentful-paint'));
-      const ttfbMs = Math.round(numAudit('server-response-time'));
-
-      const opportunities = Object.values(audits)
-        .filter((a: unknown) => {
-          const aud = a as { score?: number | null; details?: { type?: string }; title?: string };
-          return (
-            aud &&
-            aud.score !== null &&
-            aud.score !== undefined &&
-            aud.score < 0.9 &&
-            aud.details?.type === 'opportunity' &&
-            aud.title
-          );
-        })
-        .slice(0, 12)
-        .map((a: unknown) => {
-          const aud = a as {
-            id?: string;
-            title?: string;
-            displayValue?: string;
-            description?: string;
-          };
-          return {
-            title: String(aud.title || '').slice(0, 140),
-            savings: String(aud.displayValue || 'Optimization available').slice(0, 80),
-            description: String(aud.description || '').replace(/\[.*?\]\(.*?\)/g, '').slice(0, 260),
-          };
-        });
-
-      const robotsMeta = await inspectRobotsAndSitemap(parsedUrl);
-      const robotsStatus = robotsMeta.robotsBlockingAll
-        ? 'Blocked (Disallow: /)'
-        : robotsMeta.robotsTxtFound
-        ? 'Allowed'
-        : 'Missing robots.txt';
-      const sitemapStatus = robotsMeta.sitemapFound
-        ? `Active (${robotsMeta.sitemapUrls.length} sampled URLs)`
-        : 'Missing sitemap.xml';
-
       const auth = req.firebaseAuth!;
+      const keyCfg = getPageSpeedKeyConfig();
+
+      // 1. Check persisted Firestore technicalSnapshots for a <24h match on the same URL + device
+      try {
+        const existingDocs = await fsQueryByOwner<{
+          websiteId?: string;
+          url?: string;
+          strategy?: string;
+          createdAt?: string;
+          performanceScore?: number;
+          seoScore?: number;
+          accessibilityScore?: number;
+          bestPracticesScore?: number;
+          lcpMs?: number;
+          cls?: number;
+          inpMs?: number;
+          fcpMs?: number;
+          ttfbMs?: number;
+          robotsStatus?: string;
+          sitemapStatus?: string;
+          opportunities?: Array<{ title: string; savings: string; description: string }>;
+        }>(auth.idToken, 'technicalSnapshots', auth.uid, 100);
+
+        const nowMs = Date.now();
+        const recentMatch = existingDocs
+          .filter((doc) => {
+            if (doc.websiteId !== websiteId || doc.strategy !== cleanStrategy || !doc.url) {
+              return false;
+            }
+            try {
+              const docNormalized = normalizePsiUrl(new URL(doc.url));
+              if (docNormalized !== normalizedUrl) return false;
+            } catch {
+              return false;
+            }
+            const createdMs = doc.createdAt ? Date.parse(doc.createdAt) : 0;
+            return createdMs > 0 && nowMs - createdMs < PSI_CACHE_TTL_MS;
+          })
+          .sort((a, b) => Date.parse(b.createdAt || '') - Date.parse(a.createdAt || ''))[0];
+
+        if (recentMatch) {
+          const createdMs = Date.parse(recentMatch.createdAt || '');
+          res.json({
+            ...recentMatch,
+            cached: true,
+            cachedAt: recentMatch.createdAt,
+            cacheExpiresAt: new Date(createdMs + PSI_CACHE_TTL_MS).toISOString(),
+            keySource: keyCfg.source,
+          });
+          return;
+        }
+      } catch (cacheLookupErr) {
+        console.warn(
+          'Non-fatal Firestore 24h PageSpeed cache check error:',
+          cacheLookupErr instanceof Error ? cacheLookupErr.message : cacheLookupErr
+        );
+      }
+
+      // 2. Fetch via in-memory 24h cache + in-flight deduplication + quota circuit breaker
+      const psiResult = await fetchPageSpeedWithCache(parsedUrl, cleanStrategy);
+      const { metrics, cached, cachedAt, cacheExpiresAt } = psiResult;
+
       const techId = makeDocId('tech');
       const snapshotPayload = {
         ownerId: auth.uid,
         websiteId,
-        url: parsedUrl.toString().slice(0, 500),
-        strategy: cleanStrategy,
-        performanceScore,
-        seoScore,
-        accessibilityScore,
-        bestPracticesScore,
-        lcpMs,
-        cls,
-        inpMs,
-        fcpMs,
-        ttfbMs,
-        robotsStatus: robotsStatus.slice(0, 120),
-        sitemapStatus: sitemapStatus.slice(0, 120),
-        opportunities,
+        ...metrics,
       };
 
       await fsCreateDoc(auth.idToken, 'technicalSnapshots', techId, snapshotPayload, ['createdAt']);
-      await fsWriteSyncLog(auth, {
-        websiteId,
-        channel: 'pagespeed',
-        action: `PageSpeed ${cleanStrategy} audit`,
-        status: performanceScore >= 75 ? 'success' : 'warning',
-        detail: `${parsedUrl.hostname} (${cleanStrategy}): Perf ${performanceScore}, SEO ${seoScore}, LCP ${(lcpMs / 1000).toFixed(2)}s, CLS ${cls}.`,
-      });
+      if (!cached) {
+        await fsWriteSyncLog(auth, {
+          websiteId,
+          channel: 'pagespeed',
+          action: `PageSpeed ${cleanStrategy} audit`,
+          status: metrics.performanceScore >= 75 ? 'success' : 'warning',
+          detail: `${parsedUrl.hostname} (${cleanStrategy}): Perf ${metrics.performanceScore}, SEO ${metrics.seoScore}, LCP ${(metrics.lcpMs / 1000).toFixed(2)}s, CLS ${metrics.cls}.`,
+        });
+      }
 
-      res.json({ id: techId, ...snapshotPayload });
+      res.json({
+        id: techId,
+        ...snapshotPayload,
+        cached,
+        cachedAt,
+        cacheExpiresAt,
+        keySource: psiResult.keySource,
+      });
     } catch (err) {
+      if (err instanceof PageSpeedApiError) {
+        res.status(err.status).json({
+          error: err.message,
+          code: err.code,
+          quotaExceeded: err.quotaExceeded,
+          consumerProject: err.consumerProject,
+          keySource: err.keySource,
+          retryAfter: err.retryAfter,
+        });
+        return;
+      }
       const msg = err instanceof Error ? err.message : 'PageSpeed analysis failed.';
       res.status(500).json({ error: msg });
     }

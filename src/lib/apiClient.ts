@@ -1,5 +1,19 @@
 import { auth } from './firebase';
 
+export class ApiRequestError extends Error {
+  status: number;
+  code?: string;
+  data?: Record<string, unknown>;
+
+  constructor(message: string, status: number, data?: Record<string, unknown>) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.code = typeof data?.code === 'string' ? data.code : undefined;
+    this.data = data;
+  }
+}
+
 export async function apiFetch<T = unknown>(
   url: string,
   options: RequestInit & { googleAccessToken?: string | null } = {}
@@ -32,11 +46,15 @@ export async function apiFetch<T = unknown>(
   try {
     json = text ? JSON.parse(text) : {};
   } catch {
-    throw new Error(`Server returned an invalid response (${res.status}).`);
+    throw new ApiRequestError(`Server returned an invalid response (${res.status}).`, res.status);
   }
 
   if (!res.ok) {
-    throw new Error(String(json.error || `Request failed with status ${res.status}.`));
+    throw new ApiRequestError(
+      String(json.error || `Request failed with status ${res.status}.`),
+      res.status,
+      json
+    );
   }
 
   return json as T;
