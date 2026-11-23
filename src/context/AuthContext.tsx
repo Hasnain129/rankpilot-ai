@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import {
   GoogleAuthProvider,
   User,
@@ -62,12 +62,58 @@ function makeAuthError(message: string, code?: string): FormattedAuthError {
   return err;
 }
 
+function extractFirebaseCustomDetail(err: unknown): string {
+  if (!err || typeof err !== 'object') return '';
+  const rec = err as Record<string, unknown>;
+  const custom = (rec.customData && typeof rec.customData === 'object' ? rec.customData : null) as
+    | Record<string, unknown>
+    | null;
+  const tokenResp = (
+    custom?._tokenResponse && typeof custom._tokenResponse === 'object'
+      ? custom._tokenResponse
+      : null
+  ) as Record<string, unknown> | null;
+
+  const detail =
+    (typeof tokenResp?.errorMessage === 'string' && tokenResp.errorMessage) ||
+    (typeof custom?.message === 'string' && custom.message) ||
+    '';
+  return detail.trim();
+}
+
+function formatOAuthUrlError(): FormattedAuthError | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const oauthError = params.get('error') || hashParams.get('error');
+  if (!oauthError) return null;
+
+  const desc = params.get('error_description') || hashParams.get('error_description') || '';
+  if (oauthError === 'org_internal') {
+    return makeAuthError(
+      `Google OAuth blocked this account (org_internal): OAuth Consent Screen in project "${firebaseConfigSummary.projectId}" is restricted to Internal Workspace users. Change User Type to External and Publish App (or add the Gmail account under Test users) in Google Cloud Console.`,
+      'auth/user-cancelled'
+    );
+  }
+  if (oauthError === 'access_denied') {
+    return makeAuthError(
+      `Google OAuth denied sign-in (access_denied)${desc ? `: ${desc}` : ''}. If signing in with a personal @gmail.com account, verify OAuth Consent Screen in Google Cloud project "${firebaseConfigSummary.projectId}" is set to External and Published (or add the email to Test users).`,
+      'auth/user-cancelled'
+    );
+  }
+  return makeAuthError(
+    `Google OAuth returned error "${oauthError}"${desc ? `: ${desc}` : ''}.`,
+    'auth/internal-error'
+  );
+}
+
 function formatAuthError(err: unknown): FormattedAuthError {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = String((err as { code: string }).code);
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+    const customDetail = extractFirebaseCustomDetail(err);
 
-    if (code === 'auth/unauthorized-domain') {
+    if (code === 'auth/unauthorized-domain' || code === 'auth/unauthorized-continue-uri') {
       return makeAuthError(
         `Domain "${hostname}" is not authorized in Firebase project "${firebaseConfigSummary.projectId}". Add "${hostname}" under Firebase Console → Authentication → Settings → Authorized domains.`,
         code
@@ -85,8 +131,32 @@ function formatAuthError(err: unknown): FormattedAuthError {
         code
       );
     }
-    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-      return makeAuthError('Sign-in popup was closed before completion.', code);
+    if (code === 'auth/cancelled-popup-request') {
+      return makeAuthError(
+        'A Google sign-in popup is already open or was interrupted by another click. Complete or close the open popup and try again.',
+        code
+      );
+    }
+    if (code === 'auth/popup-closed-by-user') {
+      return makeAuthError(
+        `Google sign-in did not complete before the popup closed${customDetail ? ` (${customDetail})` : ''}. If Google displayed an access or verification block (Error 403: access_denied or org_internal) for a personal @gmail.com account, update the OAuth Consent Screen in Google Cloud project "${firebaseConfigSummary.projectId}" to External + Published (or add that email under Test users).`,
+        code
+      );
+    }
+    if (code === 'auth/user-cancelled') {
+      return makeAuthError(
+        `Google OAuth sign-in was denied or cancelled${customDetail ? ` (${customDetail})` : ''}. Verify OAuth Consent Screen access (External / Published or Test users) in Google Cloud project "${firebaseConfigSummary.projectId}".`,
+        code
+      );
+    }
+    if (code === 'auth/web-storage-unsupported') {
+      return makeAuthError(
+        'Browser third-party cookies or storage needed for the Firebase Auth popup are blocked. Allow storage for firebaseapp.com or open the app in a standalone tab.',
+        code
+      );
+    }
+    if (code === 'auth/user-disabled') {
+      return makeAuthError('This user account has been disabled in Firebase Authentication.', code);
     }
     if (code === 'auth/account-exists-with-different-credential') {
       return makeAuthError(
@@ -118,7 +188,16 @@ function formatAuthError(err: unknown): FormattedAuthError {
         code
       );
     }
-    return makeAuthError(err instanceof Error ? err.message : 'Authentication failed.', code);
+    if (code === 'auth/internal-error') {
+      return makeAuthError(
+        `Firebase Authentication encountered an OAuth configuration error${customDetail ? `: ${customDetail}` : ''}. Check Google Sign-In provider and OAuth Consent Screen settings in project "${firebaseConfigSummary.projectId}".`,
+        code
+      );
+    }
+    return makeAuthError(
+      customDetail || (err instanceof Error ? err.message : 'Authentication failed.'),
+      code
+    );
   }
   return err instanceof Error ? (err as FormattedAuthError) : makeAuthError('Authentication failed.');
 }
@@ -133,9 +212,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [gscAccessToken, setGscAccessToken] = useState<string | null>(null);
   const [ga4AccessToken, setGa4AccessToken] = useState<string | null>(null);
   const [authRedirectError, setAuthRedirectError] = useState<FormattedAuthError | null>(null);
+  const googleAuthInFlightRef = useRef(false);
 
   useEffect(() => {
     testFirestoreConnection().then(setFirestoreConnected);
+
+    const urlOAuthErr = formatOAuthUrlError();
+    if (urlOAuthErr) {
+      setAuthRedirectError(urlOAuthErr);
+    }
 
     getRedirectResult(auth)
       .then((result) => {
@@ -159,10 +244,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (snap.exists()) {
             setProfile(snap.data() as UserProfile);
           } else {
+            const resolvedDisplayName = (
+              firebaseUser.displayName?.trim() ||
+              firebaseUser.email?.split('@')[0] ||
+              'Member'
+            ).slice(0, 120);
             const newProfile: UserProfile = {
               uid: firebaseUser.uid,
               email: (firebaseUser.email || 'user@rankpilot.app').slice(0, 254),
-              displayName: (firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Member').slice(0, 120),
+              displayName: resolvedDisplayName,
               companyName: '',
               role: 'member',
               plan: 'free',
@@ -258,6 +348,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearGa4Token = () => setGa4AccessToken(null);
 
   const signInWithGoogle = async () => {
+    if (googleAuthInFlightRef.current) return;
+    googleAuthInFlightRef.current = true;
     setAuthRedirectError(null);
     try {
       await signInWithPopup(auth, googleProvider);
@@ -272,6 +364,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       throw formatted;
+    } finally {
+      googleAuthInFlightRef.current = false;
     }
   };
 

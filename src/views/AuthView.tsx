@@ -207,14 +207,29 @@ export function AuthView() {
             {errorMsg && (
               <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 space-y-2 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
                 <div>{errorMsg}</div>
-                {errorCode === 'auth/unauthorized-domain' && (
+                {(errorCode === 'auth/unauthorized-domain' ||
+                  errorCode === 'auth/unauthorized-continue-uri') && (
                   <div className="border-t border-red-200 pt-2 font-mono text-[11px] text-red-800 dark:border-red-900/50 dark:text-red-200 space-y-0.5">
                     <div>Domain to authorize: {currentHostname}</div>
                     <div>Firebase Project: {firebaseConfigSummary.projectId}</div>
                     <div>Auth Handler: {firebaseConfigSummary.authDomain}</div>
                   </div>
                 )}
-                {(errorCode === 'auth/popup-blocked' || errorCode === 'auth/popup-closed-by-user') &&
+                {(errorCode === 'auth/popup-closed-by-user' ||
+                  errorCode === 'auth/user-cancelled' ||
+                  errorCode === 'auth/internal-error' ||
+                  errorCode === 'auth/web-storage-unsupported') && (
+                  <div className="border-t border-red-200 pt-2 font-mono text-[11px] text-red-800 dark:border-red-900/50 dark:text-red-200 space-y-0.5">
+                    <div>Error Code: {errorCode}</div>
+                    <div>Firebase Project: {firebaseConfigSummary.projectId}</div>
+                    {firebaseConfigSummary.oAuthClientId && (
+                      <div className="truncate">OAuth Client: {firebaseConfigSummary.oAuthClientId}</div>
+                    )}
+                  </div>
+                )}
+                {(errorCode === 'auth/popup-blocked' ||
+                  errorCode === 'auth/popup-closed-by-user' ||
+                  errorCode === 'auth/web-storage-unsupported') &&
                   typeof window !== 'undefined' &&
                   window.top === window.self && (
                     <button

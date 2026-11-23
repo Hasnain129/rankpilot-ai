@@ -23,6 +23,7 @@ export const firebaseConfigSummary = {
   projectId: firebaseConfig.projectId,
   authDomain: firebaseConfig.authDomain,
   firestoreDatabaseId: firebaseConfig.firestoreDatabaseId,
+  oAuthClientId: firebaseConfig.oAuthClientId || '',
 } as const;
 
 export enum OperationType {
