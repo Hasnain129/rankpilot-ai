@@ -59,7 +59,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 const GOOGLE_REDIRECT_LOCK_KEY = 'rp_google_redirect_pending_at';
-const GOOGLE_REDIRECT_LOCK_TTL_MS = 30_000;
+const GOOGLE_REDIRECT_LOCK_TTL_MS = 5 * 60_000;
 
 let redirectResultPromise: Promise<UserCredential | null> | null = null;
 
@@ -309,11 +309,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let active = true;
     let initialAuthResolved = false;
     let redirectResolved = false;
+    let resolvedUser: User | null = auth.currentUser;
+    let redirectSucceeded = false;
+    let redirectHadError = false;
+
+    const hadPendingRedirectLock = isRedirectLockActive();
+    const urlOAuthErr = formatOAuthUrlError();
 
     const maybeMarkReady = () => {
-      if (active && initialAuthResolved && redirectResolved) {
-        setAuthReady(true);
+      if (!active || !initialAuthResolved || !redirectResolved) {
+        return;
       }
+      if (
+        hadPendingRedirectLock &&
+        !redirectSucceeded &&
+        !resolvedUser &&
+        !redirectHadError &&
+        !urlOAuthErr
+      ) {
+        const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+        const crossOriginHint = firebaseConfigSummary.usingSameOriginAuthProxy
+          ? 'Please retry sign-in and ensure cookies/session storage are enabled in your browser.'
+          : `Cross-origin third-party storage between "${hostname}" and "${firebaseConfigSummary.authDomain}" is likely blocked or partitioned by your browser (causing getRedirectResult to return null). To fix this on Vercel: deploy the /__/auth/* proxy in vercel.json, add "https://${hostname}/__/auth/handler" to Authorized redirect URIs in Google Cloud OAuth Client, and set VITE_FIREBASE_AUTH_DOMAIN=${hostname}.`;
+        setAuthRedirectError(
+          makeAuthError(
+            `Google Sign-In redirect returned without completing a session (getRedirectResult returned null). ${crossOriginHint}`,
+            'auth/redirect-empty-result'
+          )
+        );
+      }
+      setAuthReady(true);
     };
 
     const handlePageShow = (event: PageTransitionEvent) => {
@@ -329,19 +354,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (active) setFirestoreConnected(ok);
     });
 
-    const urlOAuthErr = formatOAuthUrlError();
-
     consumeRedirectResultOnce()
       .then((result) => {
         if (!active) return;
         if (result?.user) {
+          redirectSucceeded = true;
+          resolvedUser = result.user;
           setAuthRedirectError(null);
         } else if (urlOAuthErr) {
+          redirectHadError = true;
           setAuthRedirectError(urlOAuthErr);
         }
       })
       .catch((err) => {
         if (!active) return;
+        redirectHadError = true;
         const formatted = formatAuthError(err);
         if (urlOAuthErr && (!formatted.message || formatted.code === 'auth/internal-error')) {
           setAuthRedirectError(
@@ -365,56 +392,64 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!active) return;
+      resolvedUser = firebaseUser;
       setUser(firebaseUser);
-      if (firebaseUser) {
-        const profilePath = `users/${firebaseUser.uid}`;
-        try {
-          const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (!active) return;
-          if (snap.exists()) {
-            setProfile(snap.data() as UserProfile);
-          } else {
-            const resolvedDisplayName = (
-              firebaseUser.displayName?.trim() ||
-              firebaseUser.email?.split('@')[0] ||
-              'Member'
-            ).slice(0, 120);
-            const newProfile: UserProfile = {
-              uid: firebaseUser.uid,
-              email: (firebaseUser.email || 'user@rankpilot.app').slice(0, 254),
-              displayName: resolvedDisplayName,
-              companyName: '',
-              role: 'member',
-              plan: 'free',
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            };
-            await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-            if (active) setProfile(newProfile);
+      try {
+        if (firebaseUser) {
+          const profilePath = `users/${firebaseUser.uid}`;
+          try {
+            const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
+            if (!active) return;
+            if (snap.exists()) {
+              setProfile(snap.data() as UserProfile);
+            } else {
+              const resolvedDisplayName = (
+                firebaseUser.displayName?.trim() ||
+                firebaseUser.email?.split('@')[0] ||
+                'Member'
+              ).slice(0, 120);
+              const newProfile: UserProfile = {
+                uid: firebaseUser.uid,
+                email: (firebaseUser.email || 'user@rankpilot.app').slice(0, 254),
+                displayName: resolvedDisplayName,
+                companyName: '',
+                role: 'member',
+                plan: 'free',
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              };
+              await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
+              if (active) setProfile(newProfile);
+            }
+          } catch (err) {
+            console.error('Failed loading user profile:', err);
+            if (active) {
+              setProfile({
+                uid: firebaseUser.uid,
+                email: firebaseUser.email || '',
+                displayName: firebaseUser.displayName || 'Account User',
+                companyName: '',
+                role: 'member',
+                plan: 'free',
+              });
+            }
+            if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+              try {
+                handleFirestoreError(err, OperationType.GET, profilePath);
+              } catch (fsErr) {
+                console.error(fsErr);
+              }
+            }
           }
-        } catch (err) {
-          console.error('Failed loading user profile:', err);
-          if (active) {
-            setProfile({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email || '',
-              displayName: firebaseUser.displayName || 'Account User',
-              companyName: '',
-              role: 'member',
-              plan: 'free',
-            });
-          }
-          if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
-            handleFirestoreError(err, OperationType.GET, profilePath);
-          }
+        } else {
+          setProfile(null);
+          setGscAccessToken(null);
+          setGa4AccessToken(null);
         }
-      } else {
-        setProfile(null);
-        setGscAccessToken(null);
-        setGa4AccessToken(null);
+      } finally {
+        initialAuthResolved = true;
+        maybeMarkReady();
       }
-      initialAuthResolved = true;
-      maybeMarkReady();
     });
 
     return () => {

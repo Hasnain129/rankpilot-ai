@@ -8,7 +8,21 @@ import {
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+const configuredProxyAuthDomain = (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '').trim();
+const useSameOriginAuthProxy =
+  Boolean(configuredProxyAuthDomain) &&
+  typeof window !== 'undefined' &&
+  window.location.protocol === 'https:' &&
+  window.location.host === configuredProxyAuthDomain;
+
+const resolvedAuthDomain = useSameOriginAuthProxy
+  ? configuredProxyAuthDomain
+  : firebaseConfig.authDomain;
+
+const app = initializeApp({
+  ...firebaseConfig,
+  authDomain: resolvedAuthDomain,
+});
 
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
@@ -21,9 +35,11 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export const firebaseConfigSummary = {
   projectId: firebaseConfig.projectId,
-  authDomain: firebaseConfig.authDomain,
+  authDomain: resolvedAuthDomain,
+  defaultAuthDomain: firebaseConfig.authDomain,
   firestoreDatabaseId: firebaseConfig.firestoreDatabaseId,
   oAuthClientId: firebaseConfig.oAuthClientId || '',
+  usingSameOriginAuthProxy: useSameOriginAuthProxy,
 } as const;
 
 export enum OperationType {

@@ -202,6 +202,7 @@ export function AuthView() {
                 )}
                 {(errorCode === 'auth/redirect-cancelled-by-user' ||
                   errorCode === 'auth/redirect-operation-pending' ||
+                  errorCode === 'auth/redirect-empty-result' ||
                   errorCode === 'auth/user-cancelled' ||
                   errorCode === 'auth/internal-error' ||
                   errorCode === 'auth/web-storage-unsupported' ||
