@@ -1,26 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  CheckCircle2,
-  Download,
-  ExternalLink,
-  Info,
-  KeyRound,
-  Loader2,
-  Shield,
-  ShoppingBag,
-  Trash2,
-  Wand2,
-} from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, Download, ExternalLink, Info, KeyRound, Loader2, Shield, ShoppingBag, Trash2, Wand2 } from 'lucide-react';
 import { EmptyState, ErrorBanner, StatusText } from '../components/ui/DataState';
 import { useToast } from '../context/ToastContext';
 import { apiFetch } from '../lib/apiClient';
-import { SyncLog, Website, WpConnection, WpEntity } from '../types';
+import { SeoOptimization, SyncLog, Website, WpConnection, WpEntity } from '../types';
 
 interface WordPressViewProps {
   websites: Website[];
   wpConnections: WpConnection[];
   wpEntities: WpEntity[];
   syncLogs: SyncLog[];
+  optimizations?: SeoOptimization[];
   selectedWebsiteId: string;
   onAddWebsitePrompt: () => void;
   onOptimizeEntity: (entity: WpEntity) => void;
@@ -50,6 +40,7 @@ export function WordPressView({
   wpConnections,
   wpEntities,
   syncLogs,
+  optimizations = [],
   selectedWebsiteId,
   onAddWebsitePrompt,
   onOptimizeEntity,
@@ -118,6 +109,23 @@ export function WordPressView({
       )
       .slice(0, 12);
   }, [syncLogs, activeSite]);
+
+  const syncStateSummary = useMemo(() => {
+    if (!activeSite) {
+      return {
+        pendingDrafts: [] as SeoOptimization[],
+        appliedDrafts: [] as SeoOptimization[],
+        failedLogs: [] as SyncLog[],
+      };
+    }
+    const siteOpts = optimizations.filter((o) => o.websiteId === activeSite.id);
+    const pendingDrafts = siteOpts.filter(
+      (o) => o.status === 'approved' || o.status === 'pending_review'
+    );
+    const appliedDrafts = siteOpts.filter((o) => o.status === 'applied');
+    const failedLogs = scopedLogs.filter((l) => l.status === 'error');
+    return { pendingDrafts, appliedDrafts, failedLogs };
+  }, [optimizations, activeSite, scopedLogs]);
 
   if (!activeSite) {
     return (
@@ -406,6 +414,86 @@ export function WordPressView({
       </div>
 
       {error && <ErrorBanner message={error} />}
+
+      {/* Publish & Sync State Overview */}
+      <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+          <div>
+            <h3 className="font-display text-sm font-semibold">SEO Publish &amp; Sync States</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Changes are only marked Applied after WordPress or WooCommerce confirms the update.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-xs tabular-nums">
+            <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-medium">
+              <Clock className="h-3.5 w-3.5" />
+              <span>Pending: {syncStateSummary.pendingDrafts.length}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-medium">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              <span>Applied: {syncStateSummary.appliedDrafts.length}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-red-700 dark:text-red-400 font-medium">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              <span>Failed: {syncStateSummary.failedLogs.length}</span>
+            </span>
+          </div>
+        </div>
+
+        {syncStateSummary.pendingDrafts.length === 0 &&
+        syncStateSummary.appliedDrafts.length === 0 &&
+        syncStateSummary.failedLogs.length === 0 ? (
+          <div className="p-5 text-center text-xs text-slate-500 dark:text-slate-400">
+            No pending, applied, or failed SEO sync items for {activeSite.name}.
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+            {syncStateSummary.failedLogs.slice(0, 4).map((log) => (
+              <div key={log.id} className="flex flex-wrap items-start justify-between gap-3 px-5 py-3 text-xs">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-slate-900 dark:text-slate-100">{log.action}</div>
+                  <p className="mt-0.5 text-[11px] text-red-700 dark:text-red-400">{log.detail}</p>
+                </div>
+                <StatusText label="Failed" tone="danger" />
+              </div>
+            ))}
+            {syncStateSummary.pendingDrafts.slice(0, 5).map((opt) => (
+              <div key={opt.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-xs">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium text-slate-900 dark:text-slate-100">
+                    {opt.optimizedDraft.title || opt.originalSnapshot.title || opt.targetUrl}
+                  </div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                    {opt.entityType.toUpperCase()} {opt.remoteId > 0 ? `#${opt.remoteId}` : '(URL Draft)'} · {opt.targetUrl}
+                  </div>
+                </div>
+                <StatusText
+                  label={
+                    opt.status === 'approved'
+                      ? 'Pending · Approved for Sync'
+                      : 'Pending · Needs Approval'
+                  }
+                  tone={opt.status === 'approved' ? 'info' : 'warning'}
+                />
+              </div>
+            ))}
+            {syncStateSummary.appliedDrafts.slice(0, 5).map((opt) => (
+              <div key={opt.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-xs">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium text-slate-900 dark:text-slate-100">
+                    {opt.optimizedDraft.title || opt.originalSnapshot.title || opt.targetUrl}
+                  </div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                    {opt.entityType.toUpperCase()} {opt.remoteId > 0 ? `#${opt.remoteId}` : ''} ·{' '}
+                    {opt.appliedAt ? `Synced ${new Date(opt.appliedAt).toLocaleString()}` : opt.targetUrl}
+                  </div>
+                </div>
+                <StatusText label="Applied Live" tone="success" />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Imported Catalog Table */}
       <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 overflow-hidden">

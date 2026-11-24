@@ -10,7 +10,11 @@ import { AuthView } from './views/AuthView';
 import { DashboardView } from './views/DashboardView';
 import { Ga4IntegrationView } from './views/Ga4IntegrationView';
 import { KeywordResearchView } from './views/KeywordResearchView';
-import { OptimizationCenterView, OptimizationPrefill } from './views/OptimizationCenterView';
+import {
+  OnPageWorkspaceState,
+  OptimizationCenterView,
+  OptimizationPrefill,
+} from './views/OptimizationCenterView';
 import { ProfileSettingsView } from './views/ProfileSettingsView';
 import { RankTrackerView } from './views/RankTrackerView';
 import { SearchConsoleView } from './views/SearchConsoleView';
@@ -73,6 +77,14 @@ function WorkspaceApp() {
   const [scanTargetUrl, setScanTargetUrl] = useState<string | undefined>(undefined);
   const [optimizePrefill, setOptimizePrefill] = useState<OptimizationPrefill | null>(null);
   const [onPageInitialTab, setOnPageInitialTab] = useState<'drafts' | 'wordpress' | undefined>(undefined);
+  const [onPageWorkspaceState, setOnPageWorkspaceState] = useState<OnPageWorkspaceState>({
+    activeTab: 'drafts',
+    targetWebsiteId: '',
+    targetKey: '',
+    customUrl: '',
+    targetKeyword: '',
+    selectedOptId: '',
+  });
   const [technicalPrefillUrl, setTechnicalPrefillUrl] = useState<string | undefined>(undefined);
 
   // Reset scope if currently selected website was deleted
@@ -272,6 +284,8 @@ function WorkspaceApp() {
           siteCrawls={data.siteCrawls}
           optimizations={data.seoOptimizations}
           selectedWebsiteId={selectedWebsiteId}
+          persistedState={onPageWorkspaceState}
+          onPersistState={setOnPageWorkspaceState}
           initialTab={onPageInitialTab}
           onConsumeInitialTab={() => setOnPageInitialTab(undefined)}
           prefill={optimizePrefill}

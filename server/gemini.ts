@@ -1,4 +1,15 @@
-import { GenerateContentParameters, GenerateContentResponse, GoogleGenAI } from '@google/genai';
+import { GenerateContentParameters, GenerateContentResponse, GoogleGenAI, ThinkingLevel } from '@google/genai';
+
+const MIN_GEMINI_DEADLINE_MS = 10_000;
+const DEFAULT_PER_CALL_TIMEOUT_MS = 22_000;
+
+export function isGemini3Or4Model(modelId: string): boolean {
+  const lower = String(modelId || '').trim().toLowerCase().replace(/^models\//, '');
+  if (!/^gemini-(?:3|4)(?:[.\-]|$)/.test(lower)) return false;
+  return !['-tts', '-live', '-image', '-transcribe', '-audio'].some((suffix) =>
+    lower.includes(suffix)
+  );
+}
 
 export const DEFAULT_GEMINI_PRIMARY_MODEL = 'gemini-4-hydrogen';
 export const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-3.1-flash-lite'] as const;
@@ -75,6 +86,7 @@ export interface GeminiAttemptSummary {
   status: number;
   apiStatus: string;
   attempts: number;
+  detail?: string;
 }
 
 export class GeminiClassifiedError extends Error {
@@ -197,7 +209,24 @@ export function classifyGeminiError(err: unknown): ClassifiedGeminiErrorInfo {
     };
   }
 
+  const errName = err instanceof Error ? err.name : '';
   const rawMsg = err instanceof Error ? err.message : String(err);
+  if (
+    errName === 'TimeoutError' ||
+    errName === 'AbortError' ||
+    /timed?\s*out|deadline_exceeded|aborted/i.test(rawMsg)
+  ) {
+    return {
+      status: 504,
+      apiStatus: 'DEADLINE_EXCEEDED',
+      message:
+        'Gemini AI request timed out before completing (504). Please try again shortly.',
+      retryable: true,
+      canFallback: true,
+      isQuotaExhausted: false,
+    };
+  }
+
   let status =
     err && typeof err === 'object' && typeof (err as { status?: unknown }).status === 'number'
       ? Number((err as { status: number }).status)
@@ -269,11 +298,17 @@ export function classifyGeminiError(err: unknown): ClassifiedGeminiErrorInfo {
   const retryAfterMs = extractRetryAfterFromError(err, parsedDetails, detailMessage);
 
   if (status === 503 || status === 502) {
+    const cleanUpstreamHint = detailMessage
+      .replace(/AIza[0-9A-Za-z_-]{10,}/g, '[REDACTED]')
+      .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+      .trim()
+      .slice(0, 140);
     return {
       status: 503,
       apiStatus: apiStatus || 'UNAVAILABLE',
-      message:
-        'Gemini AI model is temporarily experiencing high demand (503). Automatic retries and fallback could not complete right now—please try again in a moment.',
+      message: cleanUpstreamHint
+        ? `Gemini AI model is temporarily experiencing high demand (503: ${cleanUpstreamHint}). Automatic retries and fallback could not complete right now.`
+        : 'Gemini AI model is temporarily experiencing high demand (503). Automatic retries and fallback could not complete right now—please try again in a moment.',
       retryable: true,
       canFallback: true,
       isQuotaExhausted: false,
@@ -423,6 +458,9 @@ export interface GeminiGenerateOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   maxRetryAfterWaitMs?: number;
+  perCallTimeoutMs?: number;
+  totalBudgetMs?: number;
+  preferLowThinking?: boolean;
   client?: GoogleGenAI;
   sleepFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
@@ -437,6 +475,55 @@ export interface GeminiGenerateResult {
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function parseAndValidateGeminiJson<T>(
+  rawText: string | undefined,
+  validator: (parsed: Record<string, unknown>) => T
+): T {
+  const trimmed = String(rawText || '').trim();
+  const stripped = trimmed
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  if (!stripped) {
+    throw new GeminiClassifiedError({
+      status: 502,
+      apiStatus: 'INVALID_RESPONSE',
+      message: 'Gemini AI returned an empty response instead of valid JSON.',
+      retryable: true,
+      canFallback: true,
+      isQuotaExhausted: false,
+    });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch {
+    throw new GeminiClassifiedError({
+      status: 502,
+      apiStatus: 'INVALID_RESPONSE',
+      message: 'Gemini AI returned malformed JSON output.',
+      retryable: true,
+      canFallback: true,
+      isQuotaExhausted: false,
+    });
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new GeminiClassifiedError({
+      status: 502,
+      apiStatus: 'INVALID_RESPONSE',
+      message: 'Gemini AI returned an unexpected JSON structure.',
+      retryable: true,
+      canFallback: true,
+      isQuotaExhausted: false,
+    });
+  }
+
+  return validator(parsed as Record<string, unknown>);
 }
 
 export async function generateGeminiContentWithFallback(
@@ -460,6 +547,14 @@ export async function generateGeminiContentWithFallback(
   const baseDelayMs = Math.max(100, options.baseDelayMs ?? 600);
   const maxDelayMs = Math.max(baseDelayMs, options.maxDelayMs ?? 6000);
   const maxRetryAfterWaitMs = Math.max(500, options.maxRetryAfterWaitMs ?? 8000);
+  const perCallTimeoutMs = Math.max(
+    MIN_GEMINI_DEADLINE_MS,
+    Math.min(60_000, options.perCallTimeoutMs ?? DEFAULT_PER_CALL_TIMEOUT_MS)
+  );
+  const totalBudgetMs = options.totalBudgetMs
+    ? Math.max(MIN_GEMINI_DEADLINE_MS, options.totalBudgetMs)
+    : undefined;
+  const startedAt = Date.now();
 
   const ai = options.client ?? getGeminiClient();
   const sleep = options.sleepFn ?? defaultSleep;
@@ -471,6 +566,13 @@ export async function generateGeminiContentWithFallback(
   const attemptsSummary: GeminiAttemptSummary[] = [];
 
   for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
+    if (totalBudgetMs !== undefined) {
+      const remaining = totalBudgetMs - (Date.now() - startedAt);
+      if (remaining < MIN_GEMINI_DEADLINE_MS) {
+        break;
+      }
+    }
+
     const model = modelsToTry[modelIndex];
     const isFallback = modelIndex > 0;
     const maxAttempts = isFallback ? maxFallbackAttempts : maxPrimaryAttempts;
@@ -495,12 +597,35 @@ export async function generateGeminiContentWithFallback(
     let modelLastApiStatus = 'INTERNAL';
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let callTimeoutMs = perCallTimeoutMs;
+      if (totalBudgetMs !== undefined) {
+        const remaining = totalBudgetMs - (Date.now() - startedAt);
+        if (remaining < MIN_GEMINI_DEADLINE_MS) {
+          break;
+        }
+        callTimeoutMs = Math.max(MIN_GEMINI_DEADLINE_MS, Math.min(perCallTimeoutMs, remaining));
+      }
+
       modelAttempts = attempt;
+      const attemptConfig: GenerateContentParameters['config'] = {
+        ...(options.config || {}),
+        abortSignal: options.config?.abortSignal ?? AbortSignal.timeout(callTimeoutMs),
+        httpOptions: {
+          ...(options.config?.httpOptions || {}),
+          timeout: options.config?.httpOptions?.timeout ?? callTimeoutMs,
+        },
+        ...(options.preferLowThinking &&
+        !options.config?.thinkingConfig &&
+        isGemini3Or4Model(model)
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+          : {}),
+      };
+
       try {
         const response = await ai.models.generateContent({
           model,
           contents: options.contents,
-          config: options.config,
+          config: attemptConfig,
         });
 
         attemptsSummary.push({
@@ -540,7 +665,7 @@ export async function generateGeminiContentWithFallback(
 
         const retryAfterTooLong =
           classified.retryAfterMs !== undefined && classified.retryAfterMs > maxRetryAfterWaitMs;
-        const willRetrySameModel =
+        let willRetrySameModel =
           classified.retryable && !retryAfterTooLong && attempt < maxAttempts;
 
         let nextDelayMs: number | undefined;
@@ -550,6 +675,14 @@ export async function generateGeminiContentWithFallback(
           nextDelayMs = expDelay + jitter;
           if (classified.retryAfterMs !== undefined && classified.retryAfterMs > nextDelayMs) {
             nextDelayMs = Math.min(maxRetryAfterWaitMs, classified.retryAfterMs);
+          }
+
+          if (totalBudgetMs !== undefined) {
+            const remainingAfterSleep = totalBudgetMs - (Date.now() - startedAt) - nextDelayMs;
+            if (remainingAfterSleep < MIN_GEMINI_DEADLINE_MS) {
+              willRetrySameModel = false;
+              nextDelayMs = undefined;
+            }
           }
         }
 
@@ -582,12 +715,14 @@ export async function generateGeminiContentWithFallback(
       }
     }
 
-    attemptsSummary.push({
-      model,
-      status: modelLastStatus,
-      apiStatus: modelLastApiStatus,
-      attempts: modelAttempts,
-    });
+    if (modelAttempts > 0) {
+      attemptsSummary.push({
+        model,
+        status: modelLastStatus,
+        apiStatus: modelLastApiStatus,
+        attempts: modelAttempts,
+      });
+    }
 
     const hasNextModel = modelIndex < modelsToTry.length - 1;
     if (!hasNextModel || !lastClassified?.canFallback) {

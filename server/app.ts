@@ -1,9 +1,12 @@
 import express from 'express';
+import * as cheerio from 'cheerio';
 import { Type } from '@google/genai';
 import {
+  GeminiClassifiedError,
   extractGeminiError,
   generateGeminiContentWithFallback,
   getConfiguredGeminiModels,
+  parseAndValidateGeminiJson,
 } from './gemini.ts';
 import {
   listAvailableGenerateContentModels,
@@ -77,6 +80,22 @@ function isoDateDaysAgo(days: number): string {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString().slice(0, 10);
+}
+
+function stripHtmlToText(input: unknown, maxLen: number): string {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  if (!/[<>]/.test(raw)) {
+    return raw.replace(/\s+/g, ' ').trim().slice(0, maxLen);
+  }
+  try {
+    const $ = cheerio.load(raw);
+    $('script, style, noscript, svg').remove();
+    const text = $.text().replace(/\s+/g, ' ').trim();
+    return text.slice(0, maxLen);
+  } catch {
+    return raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+  }
 }
 
 export function createApp() {
@@ -1185,6 +1204,15 @@ CRITICAL: NEVER claim or guess the competitor's Google ranking positions, organi
   // 5. Phase 3: AI Optimization Center Draft Generator (Approval Required!)
   // ---------------------------------------------------------------------------
   app.post('/api/ai/optimize', requireFirebaseAuth, aiLimiter, async (req, res) => {
+    let stage: 'core_metadata' | 'content_and_links' = 'core_metadata';
+    const allAttempts: Array<{
+      stage: string;
+      model: string;
+      status: number;
+      apiStatus: string;
+      attempts: number;
+    }> = [];
+
     try {
       const {
         entityType,
@@ -1215,114 +1243,303 @@ CRITICAL: NEVER claim or guess the competitor's Google ranking positions, organi
         return;
       }
 
-      // Optionally enrich context by inspecting live URL if no rich body supplied
+      const requestStartedAt = Date.now();
+      const TOTAL_EXECUTION_BUDGET_MS = 40_000;
+
+      const cleanTitle = stripHtmlToText(currentTitle, 220);
+      const cleanSeoTitle = stripHtmlToText(currentSeoTitle, 220);
+      const cleanSeoDescription = stripHtmlToText(currentSeoDescription, 400);
+      const cleanShortDesc = stripHtmlToText(currentShortDescription, 400);
+      const cleanDesc = stripHtmlToText(currentDescription, 1200);
+      const effectiveKeyword = stripHtmlToText(targetKeyword || cleanTitle, 160);
+
+      // Conditionally enrich context only when page metadata/body is sparse, with a 4.5s hard cap
       let liveExcerpt = '';
       let liveH1 = '';
       let missingImgSample: string[] = [];
-      try {
-        const raw = await inspectPageRaw(targetUrl, 0);
-        liveExcerpt = raw.page.bodyExcerpt;
-        liveH1 = raw.page.h1;
-        missingImgSample = raw.page.imageAltsMissingSample;
-      } catch {
-        // fallback cleanly to provided fields
+      const needsLiveCrawl =
+        cleanDesc.length < 120 || (!cleanSeoTitle && !cleanSeoDescription);
+      if (needsLiveCrawl) {
+        try {
+          const raw = await Promise.race([
+            inspectPageRaw(targetUrl, 0),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Live crawl timeout')), 4500)
+            ),
+          ]);
+          liveExcerpt = stripHtmlToText(raw.page.bodyExcerpt, 900);
+          liveH1 = stripHtmlToText(raw.page.h1, 180);
+          missingImgSample = (raw.page.imageAltsMissingSample || []).slice(0, 3);
+        } catch {
+          // Fallback cleanly to provided fields
+        }
       }
 
-      const inventoryList = (siteInventory || []).slice(0, 15);
+      const bodyContext = cleanDesc || liveExcerpt || 'No body copy provided';
+      const inventoryList = (Array.isArray(siteInventory) ? siteInventory : [])
+        .filter((i) => i?.url && i?.title && i.url !== targetUrl)
+        .slice(0, 8);
 
-      const { response } = await generateGeminiContentWithFallback({
-        operation: 'seo_optimize',
-        contents: `Create a conversion-oriented, search-optimized SEO upgrade package for this ${entityType || 'page'}:
+      const configuredModels = getConfiguredGeminiModels();
+
+      // Step 1: Core On-Page Metadata & Quick Suggestions (compact flat schema)
+      stage = 'core_metadata';
+      const step1 = await generateGeminiContentWithFallback({
+        operation: 'seo_optimize_core',
+        primaryModel: configuredModels.primaryModel,
+        fallbackModels: configuredModels.fallbackModels,
+        preferLowThinking: true,
+        perCallTimeoutMs: 18_000,
+        totalBudgetMs: 24_000,
+        maxPrimaryAttempts: 2,
+        maxFallbackAttempts: 1,
+        baseDelayMs: 400,
+        maxDelayMs: 2000,
+        maxRetryAfterWaitMs: 2500,
+        contents: `Optimize on-page SEO metadata for this ${entityType || 'page'}:
 URL: ${targetUrl}
-Target Keyword: "${targetKeyword || currentTitle}"
-Current Title / Name: "${currentTitle}"
-Current H1: "${liveH1}"
-Current SEO Meta Title: "${currentSeoTitle}"
-Current SEO Meta Description: "${currentSeoDescription}"
-Current Short Description / Excerpt: "${String(currentShortDescription).slice(0, 800)}"
-Current Body / Description HTML/Text: "${String(currentDescription || liveExcerpt).slice(0, 2200)}"
-Missing Alt Images Count: ${missingAltCount} (samples: ${missingImgSample.join(', ') || 'none'})
+Focus Keyword: "${effectiveKeyword}"
+Current Title: "${cleanTitle || 'Not set'}"
+Current H1: "${liveH1 || 'Not set'}"
+Current SEO Meta Title: "${cleanSeoTitle || 'Not set'}"
+Current SEO Meta Description: "${cleanSeoDescription || 'Not set'}"
+Short Summary: "${cleanShortDesc || 'None'}"
+Page Excerpt: "${bodyContext.slice(0, 900)}"
+Missing Image Alts: ${Number(missingAltCount) || 0}${missingImgSample.length ? ` (${missingImgSample.join(', ')})` : ''}
 
-Available Internal Pages on this Website (ONLY suggest internal links using exact URLs from this list):
-${inventoryList.map((item) => `- ${item.title}: ${item.url}`).join('\n') || 'None supplied'}
-
-Requirements:
-- Keep seoTitle 50-60 chars and seoDescription 135-155 chars.
-- Produce clean HTML/copy for optimizedDescription with logical H2 subheadings, clear value props, and natural keyword placement.
-- Suggest up to 3 image alt attributes if images lack alt text.
-- Suggest up to 4 internal links ONLY from the supplied Available Internal Pages list (or empty array if none supplied).
-- Generate 3 concise, high-intent FAQs and valid JSON-LD FAQPage schema string.`,
-          config: {
-            systemInstruction: 'You are an expert e-commerce and SaaS on-page SEO specialist. Never hallucinate internal URLs outside the supplied site inventory.',
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                focusKeyword: { type: Type.STRING },
-                optimizedTitle: { type: Type.STRING },
-                optimizedSeoTitle: { type: Type.STRING },
-                optimizedSeoDescription: { type: Type.STRING },
-                optimizedShortDescription: { type: Type.STRING },
-                optimizedDescription: { type: Type.STRING },
-                headingSuggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                imageAltSuggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                internalLinksSuggested: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      anchorText: { type: Type.STRING },
-                      targetUrl: { type: Type.STRING },
-                      reason: { type: Type.STRING },
-                    },
-                    required: ['anchorText', 'targetUrl', 'reason'],
-                  },
-                },
-                faqs: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      question: { type: Type.STRING },
-                      answer: { type: Type.STRING },
-                    },
-                    required: ['question', 'answer'],
-                  },
-                },
-                aiNotes: { type: Type.STRING },
-              },
-              required: [
-                'focusKeyword',
-                'optimizedTitle',
-                'optimizedSeoTitle',
-                'optimizedSeoDescription',
-                'optimizedShortDescription',
-                'optimizedDescription',
-                'headingSuggestions',
-                'imageAltSuggestions',
-                'internalLinksSuggested',
-                'faqs',
-                'aiNotes',
-              ],
+Rules:
+- optimizedSeoTitle: 50-60 characters, compelling CTR, include focus keyword.
+- optimizedSeoDescription: 135-155 characters with clear benefit and CTA.
+- headingSuggestions: 3-5 concise H2/H3 recommendations.
+- imageAltSuggestions: up to 3 descriptive alt texts (or [] if 0 missing).
+- aiNotes: 1-2 sentences summarizing the key SEO improvements.`,
+        config: {
+          systemInstruction:
+            'You are an on-page SEO specialist. Return strictly valid JSON matching the schema. Be concise.',
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              focusKeyword: { type: Type.STRING },
+              optimizedTitle: { type: Type.STRING },
+              optimizedSeoTitle: { type: Type.STRING },
+              optimizedSeoDescription: { type: Type.STRING },
+              optimizedShortDescription: { type: Type.STRING },
+              headingSuggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+              imageAltSuggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+              aiNotes: { type: Type.STRING },
             },
+            required: [
+              'focusKeyword',
+              'optimizedTitle',
+              'optimizedSeoTitle',
+              'optimizedSeoDescription',
+              'optimizedShortDescription',
+              'headingSuggestions',
+              'imageAltSuggestions',
+              'aiNotes',
+            ],
           },
+        },
       });
 
-      const parsed = JSON.parse(response.text || '{}');
-      const allowedUrls = new Set(inventoryList.map((i) => i.url));
-      const groundedLinks = Array.isArray(parsed.internalLinksSuggested)
-        ? parsed.internalLinksSuggested
-            .filter((l: { targetUrl?: string }) => l?.targetUrl && allowedUrls.has(l.targetUrl))
-            .slice(0, 6)
-        : [];
+      allAttempts.push({
+        stage: 'core_metadata',
+        model: step1.modelUsed,
+        status: 200,
+        apiStatus: 'OK',
+        attempts: step1.retryCount + 1,
+      });
 
-      const faqs = Array.isArray(parsed.faqs) ? parsed.faqs.slice(0, 5) : [];
+      const coreParsed = parseAndValidateGeminiJson<{
+        focusKeyword: string;
+        optimizedTitle: string;
+        optimizedSeoTitle: string;
+        optimizedSeoDescription: string;
+        optimizedShortDescription: string;
+        headingSuggestions: string[];
+        imageAltSuggestions: string[];
+        aiNotes: string;
+      }>(step1.response.text, (obj) => {
+        const title = String(obj.optimizedTitle || cleanTitle || '').trim();
+        const seoTitle = String(obj.optimizedSeoTitle || '').trim();
+        const seoDesc = String(obj.optimizedSeoDescription || '').trim();
+        if (!title || !seoTitle || !seoDesc) {
+          throw new GeminiClassifiedError({
+            status: 502,
+            apiStatus: 'INVALID_RESPONSE',
+            message: 'Gemini AI returned incomplete core SEO metadata.',
+            retryable: true,
+            canFallback: true,
+            isQuotaExhausted: false,
+          });
+        }
+        return {
+          focusKeyword: String(obj.focusKeyword || effectiveKeyword).trim(),
+          optimizedTitle: title,
+          optimizedSeoTitle: seoTitle,
+          optimizedSeoDescription: seoDesc,
+          optimizedShortDescription: String(obj.optimizedShortDescription || cleanShortDesc || '').trim(),
+          headingSuggestions: Array.isArray(obj.headingSuggestions)
+            ? obj.headingSuggestions.map((h) => String(h || '').trim()).filter(Boolean).slice(0, 8)
+            : [],
+          imageAltSuggestions: Array.isArray(obj.imageAltSuggestions)
+            ? obj.imageAltSuggestions.map((a) => String(a || '').trim()).filter(Boolean).slice(0, 8)
+            : [],
+          aiNotes: String(obj.aiNotes || '').trim(),
+        };
+      });
+
+      // Step 2: Concise Body Copy, FAQs & Grounded Internal Links (reuses working Step 1 model first)
+      stage = 'content_and_links';
+      const step2Primary = step1.modelUsed;
+      const step2Fallbacks = [
+        configuredModels.primaryModel,
+        ...configuredModels.fallbackModels,
+      ].filter((m, idx, arr) => m && m !== step2Primary && arr.indexOf(m) === idx);
+
+      const elapsedMs = Date.now() - requestStartedAt;
+      const step2BudgetMs = Math.max(12_000, TOTAL_EXECUTION_BUDGET_MS - elapsedMs);
+
+      const contentProperties: Record<string, { type: Type; items?: Record<string, unknown> }> = {
+        optimizedDescription: { type: Type.STRING },
+        faqs: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING },
+              answer: { type: Type.STRING },
+            },
+            required: ['question', 'answer'],
+          },
+        },
+      };
+      const contentRequired = ['optimizedDescription', 'faqs'];
+
+      if (inventoryList.length > 0) {
+        contentProperties.internalLinksSuggested = {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              anchorText: { type: Type.STRING },
+              targetUrl: { type: Type.STRING },
+              reason: { type: Type.STRING },
+            },
+            required: ['anchorText', 'targetUrl', 'reason'],
+          },
+        };
+        contentRequired.push('internalLinksSuggested');
+      }
+
+      const step2 = await generateGeminiContentWithFallback({
+        operation: 'seo_optimize_content',
+        primaryModel: step2Primary,
+        fallbackModels: step2Fallbacks,
+        preferLowThinking: true,
+        perCallTimeoutMs: Math.min(18_000, step2BudgetMs),
+        totalBudgetMs: step2BudgetMs,
+        maxPrimaryAttempts: 2,
+        maxFallbackAttempts: 1,
+        baseDelayMs: 400,
+        maxDelayMs: 2000,
+        maxRetryAfterWaitMs: 2500,
+        contents: `Generate optimized page copy and FAQs for this ${entityType || 'page'}:
+URL: ${targetUrl}
+Focus Keyword: "${coreParsed.focusKeyword}"
+Optimized Title: "${coreParsed.optimizedTitle}"
+Target Headings: ${coreParsed.headingSuggestions.slice(0, 4).join(' | ') || 'Logical H2 subheadings'}
+Current Page Excerpt: "${bodyContext.slice(0, 900)}"
+${
+  inventoryList.length > 0
+    ? `\nAvailable Internal Pages (suggest up to 3 links using ONLY these exact URLs):\n${inventoryList
+        .map((item) => `- ${stripHtmlToText(item.title, 80)}: ${item.url}`)
+        .join('\n')}`
+    : ''
+}
+
+Rules:
+- optimizedDescription: clean semantic HTML (<p>, <h2>, <ul>, <li>) up to 1,500 chars with natural keyword usage.
+- faqs: 2-3 concise high-intent Q&A items.`,
+        config: {
+          systemInstruction:
+            'You are an on-page SEO copywriter. Return strictly valid JSON. Never invent internal URLs outside the provided list.',
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: contentProperties,
+            required: contentRequired,
+          },
+        },
+      });
+
+      allAttempts.push({
+        stage: 'content_and_links',
+        model: step2.modelUsed,
+        status: 200,
+        apiStatus: 'OK',
+        attempts: step2.retryCount + 1,
+      });
+
+      const contentParsed = parseAndValidateGeminiJson<{
+        optimizedDescription: string;
+        faqs: Array<{ question: string; answer: string }>;
+        internalLinksSuggested: Array<{ anchorText: string; targetUrl: string; reason: string }>;
+      }>(step2.response.text, (obj) => {
+        const desc = String(obj.optimizedDescription || '').trim();
+        if (!desc) {
+          throw new GeminiClassifiedError({
+            status: 502,
+            apiStatus: 'INVALID_RESPONSE',
+            message: 'Gemini AI returned an empty page description.',
+            retryable: true,
+            canFallback: true,
+            isQuotaExhausted: false,
+          });
+        }
+        const allowedUrls = new Set(inventoryList.map((i) => i.url));
+        const rawLinks = Array.isArray(obj.internalLinksSuggested)
+          ? obj.internalLinksSuggested
+          : [];
+        const links = rawLinks
+          .filter(
+            (l): l is { anchorText: string; targetUrl: string; reason: string } =>
+              Boolean(l && typeof l === 'object' && l.targetUrl && allowedUrls.has(String(l.targetUrl)))
+          )
+          .map((l) => ({
+            anchorText: String(l.anchorText || '').trim().slice(0, 140),
+            targetUrl: String(l.targetUrl).trim(),
+            reason: String(l.reason || '').trim().slice(0, 260),
+          }))
+          .filter((l) => l.anchorText && l.targetUrl)
+          .slice(0, 6);
+
+        const rawFaqs = Array.isArray(obj.faqs) ? obj.faqs : [];
+        const faqs = rawFaqs
+          .filter(
+            (f): f is { question: string; answer: string } =>
+              Boolean(f && typeof f === 'object' && f.question && f.answer)
+          )
+          .map((f) => ({
+            question: String(f.question).trim(),
+            answer: String(f.answer).trim(),
+          }))
+          .slice(0, 5);
+
+        return {
+          optimizedDescription: desc,
+          faqs,
+          internalLinksSuggested: links,
+        };
+      });
+
       const faqSchemaObj =
-        faqs.length > 0
+        contentParsed.faqs.length > 0
           ? {
               '@context': 'https://schema.org',
               '@type': 'FAQPage',
-              mainEntity: faqs.map((f: { question: string; answer: string }) => ({
+              mainEntity: contentParsed.faqs.map((f) => ({
                 '@type': 'Question',
                 name: f.question,
                 acceptedAnswer: {
@@ -1334,32 +1551,44 @@ Requirements:
           : null;
 
       res.json({
-        focusKeyword: String(parsed.focusKeyword || targetKeyword || '').slice(0, 200),
+        focusKeyword: coreParsed.focusKeyword.slice(0, 200),
         optimizedDraft: {
-          title: String(parsed.optimizedTitle || currentTitle).slice(0, 300),
-          seoTitle: String(parsed.optimizedSeoTitle || '').slice(0, 300),
-          seoDescription: String(parsed.optimizedSeoDescription || '').slice(0, 600),
-          shortDescription: String(parsed.optimizedShortDescription || '').slice(0, 5000),
-          description: String(parsed.optimizedDescription || '').slice(0, 20000),
-          headingSuggestions: Array.isArray(parsed.headingSuggestions)
-            ? parsed.headingSuggestions.slice(0, 8)
-            : [],
-          imageAltSuggestions: Array.isArray(parsed.imageAltSuggestions)
-            ? parsed.imageAltSuggestions.slice(0, 8)
-            : [],
+          title: coreParsed.optimizedTitle.slice(0, 300),
+          seoTitle: coreParsed.optimizedSeoTitle.slice(0, 300),
+          seoDescription: coreParsed.optimizedSeoDescription.slice(0, 600),
+          shortDescription: coreParsed.optimizedShortDescription.slice(0, 5000),
+          description: contentParsed.optimizedDescription.slice(0, 20000),
+          headingSuggestions: coreParsed.headingSuggestions,
+          imageAltSuggestions: coreParsed.imageAltSuggestions,
         },
-        internalLinksSuggested: groundedLinks,
+        internalLinksSuggested: contentParsed.internalLinksSuggested,
         faqSchemaJson: faqSchemaObj ? JSON.stringify(faqSchemaObj, null, 2).slice(0, 12000) : '',
-        aiNotes: String(parsed.aiNotes || '').slice(0, 2000),
+        aiNotes: coreParsed.aiNotes.slice(0, 2000),
+        meta: {
+          modelUsed: step2.modelUsed,
+          step1Model: step1.modelUsed,
+          step2Model: step2.modelUsed,
+        },
       });
     } catch (err) {
       const { status, message, retryAfterSeconds, attemptsSummary } = extractGeminiError(err);
       if (retryAfterSeconds) {
         res.setHeader('Retry-After', String(retryAfterSeconds));
       }
+      const combinedAttempts = [
+        ...allAttempts.map((a) => ({
+          model: a.model,
+          status: a.status,
+          apiStatus: a.apiStatus,
+          attempts: a.attempts,
+          detail: a.stage,
+        })),
+        ...(attemptsSummary || []).map((a) => ({ ...a, detail: a.detail || stage })),
+      ];
       res.status(status).json({
         error: message,
-        ...(attemptsSummary ? { modelAttempts: attemptsSummary } : {}),
+        stage,
+        ...(combinedAttempts.length > 0 ? { modelAttempts: combinedAttempts } : {}),
       });
     }
   });
@@ -1577,6 +1806,7 @@ Requirements:
   });
 
   app.post('/api/wordpress/apply', requireFirebaseAuth, aiLimiter, async (req, res) => {
+    let appliedOptForLog: { websiteId: string; remoteId: number; entityType: string } | null = null;
     try {
       const { optimizationId, recheckLive = true } = req.body as {
         optimizationId?: string;
@@ -1609,6 +1839,11 @@ Requirements:
         res.status(404).json({ error: 'Optimization record not found.' });
         return;
       }
+      appliedOptForLog = {
+        websiteId: opt.websiteId,
+        remoteId: opt.remoteId,
+        entityType: opt.entityType,
+      };
       if (opt.status !== 'approved') {
         res.status(400).json({
           error: `Safety gate: Optimization must be explicitly approved by a user before modifying live WordPress data (current status: ${opt.status}).`,
@@ -1682,6 +1917,19 @@ Requirements:
       res.json({ ok: true, detail: pushRes.detail, appliedAt, verifiedScore });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed applying optimization to WordPress.';
+      if (appliedOptForLog && req.firebaseAuth) {
+        await fsWriteSyncLog(req.firebaseAuth, {
+          websiteId: appliedOptForLog.websiteId,
+          channel:
+            appliedOptForLog.entityType === 'product' ||
+            appliedOptForLog.entityType === 'category'
+              ? 'woocommerce'
+              : 'wordpress',
+          action: `Apply approved optimization #${appliedOptForLog.remoteId}`,
+          status: 'error',
+          detail: msg.slice(0, 500),
+        }).catch(() => {});
+      }
       res.status(500).json({ error: msg });
     }
   });
@@ -2323,7 +2571,16 @@ Requirements:
 
       // 2. Fetch via in-memory 24h cache + in-flight deduplication + quota circuit breaker
       const psiResult = await fetchPageSpeedWithCache(parsedUrl, cleanStrategy);
-      const { metrics, cached, cachedAt, cacheExpiresAt } = psiResult;
+      const {
+        metrics,
+        cached,
+        cachedAt,
+        cacheExpiresAt,
+        durationMs,
+        upstreamStatus,
+        attempts,
+        timeoutMs,
+      } = psiResult;
 
       const techId = makeDocId('tech');
       const snapshotPayload = {
@@ -2339,7 +2596,7 @@ Requirements:
           channel: 'pagespeed',
           action: `PageSpeed ${cleanStrategy} audit`,
           status: metrics.performanceScore >= 75 ? 'success' : 'warning',
-          detail: `${parsedUrl.hostname} (${cleanStrategy}): Perf ${metrics.performanceScore}, SEO ${metrics.seoScore}, LCP ${(metrics.lcpMs / 1000).toFixed(2)}s, CLS ${metrics.cls}.`,
+          detail: `${parsedUrl.hostname} (${cleanStrategy}): Perf ${metrics.performanceScore}, SEO ${metrics.seoScore}, LCP ${(metrics.lcpMs / 1000).toFixed(2)}s, CLS ${metrics.cls} (${Math.round(durationMs / 100) / 10}s).`,
         });
       }
 
@@ -2350,6 +2607,10 @@ Requirements:
         cachedAt,
         cacheExpiresAt,
         keySource: psiResult.keySource,
+        durationMs,
+        upstreamStatus,
+        attempts,
+        timeoutMs,
       });
     } catch (err) {
       if (err instanceof PageSpeedApiError) {
@@ -2360,6 +2621,10 @@ Requirements:
           consumerProject: err.consumerProject,
           keySource: err.keySource,
           retryAfter: err.retryAfter,
+          upstreamStatus: err.upstreamStatus,
+          durationMs: err.durationMs,
+          attempts: err.attempts,
+          timeoutMs: err.timeoutMs,
         });
         return;
       }
