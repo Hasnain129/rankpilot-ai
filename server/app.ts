@@ -6,6 +6,10 @@ import {
   getConfiguredGeminiModels,
 } from './gemini.ts';
 import {
+  requireDiagnosticAdmin,
+  runGeminiAvailabilityDiagnostic,
+} from './geminiDiagnostic.ts';
+import {
   fsCreateDoc,
   fsDeleteDoc,
   fsGetDoc,
@@ -46,11 +50,11 @@ import {
 } from './keywordProviders.ts';
 
 const rateBuckets = new Map<string, number[]>();
-function createRateLimiter(limit: number, windowMs: number) {
+function createRateLimiter(limit: number, windowMs: number, scope = 'default') {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const ip = String(req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',')[0].trim();
     const uid = req.firebaseAuth?.uid || ip;
-    const key = `${req.path}:${uid}`;
+    const key = `${scope}:${req.path}:${uid}`;
     const now = Date.now();
     const recent = (rateBuckets.get(key) || []).filter((ts) => now - ts < windowMs);
     if (recent.length >= limit) {
@@ -78,7 +82,10 @@ export function createApp() {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
 
-  const aiLimiter = createRateLimiter(25, 60_000);
+  const aiLimiter = createRateLimiter(25, 60_000, 'ai');
+  const diagnosticStatusLimiter = createRateLimiter(20, 60_000, 'diag_status');
+  const diagnosticBurstLimiter = createRateLimiter(2, 60_000, 'diag_burst');
+  const diagnosticHourlyLimiter = createRateLimiter(8, 60 * 60_000, 'diag_hourly');
 
   // ---------------------------------------------------------------------------
   // 0. Health Endpoint (public, zero secrets)
@@ -140,6 +147,71 @@ export function createApp() {
       languages: Object.values(LANGUAGE_TARGETS).map((l) => ({ code: l.code, label: l.label })),
     });
   });
+
+  // Temporary, admin-only Gemini model availability diagnostic (disabled by default)
+  app.get(
+    '/api/admin/gemini-diagnostic',
+    requireFirebaseAuth,
+    requireDiagnosticAdmin,
+    diagnosticStatusLimiter,
+    (_req, res) => {
+      const configured = getConfiguredGeminiModels();
+      res.json({
+        enabled: true,
+        authorized: true,
+        configured: {
+          primaryModel: configured.primaryModel,
+          fallbackModels: configured.fallbackModels,
+        },
+      });
+    }
+  );
+
+  app.post(
+    '/api/admin/gemini-diagnostic',
+    requireFirebaseAuth,
+    requireDiagnosticAdmin,
+    diagnosticBurstLimiter,
+    diagnosticHourlyLimiter,
+    async (req, res) => {
+      try {
+        const rawModels = (req.body as { models?: unknown } | undefined)?.models;
+        let requestedModels: string[] | undefined;
+        if (rawModels !== undefined) {
+          if (
+            !Array.isArray(rawModels) ||
+            rawModels.length === 0 ||
+            rawModels.length > 4 ||
+            rawModels.some(
+              (m) => typeof m !== 'string' || !/^[a-zA-Z0-9._-]{2,80}$/.test(m.trim().replace(/^models\//, ''))
+            )
+          ) {
+            res.status(400).json({
+              error: 'Optional "models" field must be an array of 1 to 4 valid Gemini model IDs.',
+            });
+            return;
+          }
+          requestedModels = rawModels.map((m) => String(m).trim());
+        }
+
+        const report = await runGeminiAvailabilityDiagnostic({ requestedModels });
+        console.info(
+          '[GeminiDiagnostic]',
+          JSON.stringify({
+            uid: req.firebaseAuth?.uid || 'unknown',
+            modelsListSuccess: report.modelsList.success,
+            testedCount: report.modelTests.length,
+            workingStructuredJsonModels: report.summary.workingStructuredJsonModels,
+            unavailable503Models: report.summary.unavailable503Models,
+          })
+        );
+        res.json(report);
+      } catch (err) {
+        const { status, message } = extractGeminiError(err);
+        res.status(status).json({ error: message });
+      }
+    }
+  );
 
   // ---------------------------------------------------------------------------
   // 1. Protected Single-Page Technical Audit + AI Recommendations
@@ -805,11 +877,14 @@ Requirements:
         suggestedTitles: (parsed.suggestedTitles || []).slice(0, 12),
       });
     } catch (err) {
-      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds, attemptsSummary } = extractGeminiError(err);
       if (retryAfterSeconds) {
         res.setHeader('Retry-After', String(retryAfterSeconds));
       }
-      res.status(status).json({ error: message });
+      res.status(status).json({
+        error: message,
+        ...(attemptsSummary ? { modelAttempts: attemptsSummary } : {}),
+      });
     }
   });
 
@@ -914,11 +989,14 @@ ${slice
           'Intent & competition tiers are AI-estimated. Connect Google Search Console or a verified volume provider for live metrics.',
       });
     } catch (err) {
-      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds, attemptsSummary } = extractGeminiError(err);
       if (retryAfterSeconds) {
         res.setHeader('Retry-After', String(retryAfterSeconds));
       }
-      res.status(status).json({ error: message });
+      res.status(status).json({
+        error: message,
+        ...(attemptsSummary ? { modelAttempts: attemptsSummary } : {}),
+      });
     }
   });
 
@@ -1070,11 +1148,14 @@ CRITICAL: NEVER claim or guess the competitor's Google ranking positions, organi
           'Competitor headings and on-page text were crawled live. Actual Google ranking positions, search volumes, and organic traffic are unavailable without a connected SEO/SERP data provider.',
       });
     } catch (err) {
-      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds, attemptsSummary } = extractGeminiError(err);
       if (retryAfterSeconds) {
         res.setHeader('Retry-After', String(retryAfterSeconds));
       }
-      res.status(status).json({ error: message });
+      res.status(status).json({
+        error: message,
+        ...(attemptsSummary ? { modelAttempts: attemptsSummary } : {}),
+      });
     }
   });
 
@@ -1250,11 +1331,14 @@ Requirements:
         aiNotes: String(parsed.aiNotes || '').slice(0, 2000),
       });
     } catch (err) {
-      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds, attemptsSummary } = extractGeminiError(err);
       if (retryAfterSeconds) {
         res.setHeader('Retry-After', String(retryAfterSeconds));
       }
-      res.status(status).json({ error: message });
+      res.status(status).json({
+        error: message,
+        ...(attemptsSummary ? { modelAttempts: attemptsSummary } : {}),
+      });
     }
   });
 
@@ -2600,11 +2684,14 @@ Rules:
 
       res.json({ createdCount: createdIds.length, createdIds });
     } catch (err) {
-      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds, attemptsSummary } = extractGeminiError(err);
       if (retryAfterSeconds) {
         res.setHeader('Retry-After', String(retryAfterSeconds));
       }
-      res.status(status).json({ error: message });
+      res.status(status).json({
+        error: message,
+        ...(attemptsSummary ? { modelAttempts: attemptsSummary } : {}),
+      });
     }
   });
 

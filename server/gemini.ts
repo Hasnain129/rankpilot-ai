@@ -70,6 +70,13 @@ export interface ClassifiedGeminiErrorInfo {
   retryAfterMs?: number;
 }
 
+export interface GeminiAttemptSummary {
+  model: string;
+  status: number;
+  apiStatus: string;
+  attempts: number;
+}
+
 export class GeminiClassifiedError extends Error {
   status: number;
   apiStatus: string;
@@ -80,12 +87,14 @@ export class GeminiClassifiedError extends Error {
   model?: string;
   retryCount: number;
   fallbackUsed: boolean;
+  attemptsSummary: GeminiAttemptSummary[];
 
   constructor(
     info: ClassifiedGeminiErrorInfo & {
       model?: string;
       retryCount?: number;
       fallbackUsed?: boolean;
+      attemptsSummary?: GeminiAttemptSummary[];
     }
   ) {
     super(info.message);
@@ -99,6 +108,7 @@ export class GeminiClassifiedError extends Error {
     this.model = info.model;
     this.retryCount = info.retryCount ?? 0;
     this.fallbackUsed = info.fallbackUsed ?? false;
+    this.attemptsSummary = info.attemptsSummary ?? [];
   }
 }
 
@@ -383,16 +393,22 @@ export function extractGeminiError(err: unknown): {
   status: number;
   message: string;
   retryAfterSeconds?: number;
+  attemptsSummary?: GeminiAttemptSummary[];
 } {
   const info = classifyGeminiError(err);
   const retryAfterSeconds =
     info.retryAfterMs && info.retryAfterMs > 0
       ? Math.max(1, Math.ceil(info.retryAfterMs / 1000))
       : undefined;
+  const attemptsSummary =
+    err instanceof GeminiClassifiedError && err.attemptsSummary.length > 0
+      ? err.attemptsSummary
+      : undefined;
   return {
     status: info.status,
     message: info.message,
     retryAfterSeconds,
+    attemptsSummary,
   };
 }
 
@@ -452,6 +468,7 @@ export async function generateGeminiContentWithFallback(
   let totalRetries = 0;
   let lastClassified: ClassifiedGeminiErrorInfo | null = null;
   let lastModel = primaryModel;
+  const attemptsSummary: GeminiAttemptSummary[] = [];
 
   for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
     const model = modelsToTry[modelIndex];
@@ -473,12 +490,24 @@ export async function generateGeminiContentWithFallback(
       );
     }
 
+    let modelAttempts = 0;
+    let modelLastStatus = 500;
+    let modelLastApiStatus = 'INTERNAL';
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      modelAttempts = attempt;
       try {
         const response = await ai.models.generateContent({
           model,
           contents: options.contents,
           config: options.config,
+        });
+
+        attemptsSummary.push({
+          model,
+          status: 200,
+          apiStatus: 'OK',
+          attempts: modelAttempts,
         });
 
         if (isFallback || totalRetries > 0) {
@@ -492,6 +521,7 @@ export async function generateGeminiContentWithFallback(
               retryCount: totalRetries,
               fallbackUsed: isFallback,
               fallbackOutcome: isFallback ? 'succeeded' : 'not_needed',
+              attemptsSummary,
             })
           );
         }
@@ -505,6 +535,8 @@ export async function generateGeminiContentWithFallback(
       } catch (err) {
         const classified = classifyGeminiError(err);
         lastClassified = classified;
+        modelLastStatus = classified.status;
+        modelLastApiStatus = classified.apiStatus;
 
         const retryAfterTooLong =
           classified.retryAfterMs !== undefined && classified.retryAfterMs > maxRetryAfterWaitMs;
@@ -550,24 +582,39 @@ export async function generateGeminiContentWithFallback(
       }
     }
 
+    attemptsSummary.push({
+      model,
+      status: modelLastStatus,
+      apiStatus: modelLastApiStatus,
+      attempts: modelAttempts,
+    });
+
     const hasNextModel = modelIndex < modelsToTry.length - 1;
     if (!hasNextModel || !lastClassified?.canFallback) {
       break;
     }
   }
 
+  const baseInfo = lastClassified || {
+    status: 500,
+    apiStatus: 'INTERNAL',
+    message: 'Unexpected backend error while communicating with Gemini AI.',
+    retryable: false,
+    canFallback: false,
+    isQuotaExhausted: false,
+  };
+  const attemptDetail =
+    attemptsSummary.length > 0
+      ? ` Attempted: ${attemptsSummary.map((a) => `${a.model} (${a.status} x${a.attempts})`).join(', ')}.`
+      : '';
+
   const finalError = new GeminiClassifiedError({
-    ...(lastClassified || {
-      status: 500,
-      apiStatus: 'INTERNAL',
-      message: 'Unexpected backend error while communicating with Gemini AI.',
-      retryable: false,
-      canFallback: false,
-      isQuotaExhausted: false,
-    }),
+    ...baseInfo,
+    message: `${baseInfo.message}${attemptDetail}`,
     model: lastModel,
     retryCount: totalRetries,
     fallbackUsed: modelsToTry.length > 1 && lastModel !== primaryModel,
+    attemptsSummary,
   });
 
   console.error(
@@ -580,6 +627,7 @@ export async function generateGeminiContentWithFallback(
       retryCount: finalError.retryCount,
       fallbackUsed: finalError.fallbackUsed,
       fallbackOutcome: finalError.fallbackUsed ? 'failed' : 'not_attempted',
+      attemptsSummary: finalError.attemptsSummary,
     })
   );
 
