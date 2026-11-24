@@ -1,5 +1,10 @@
 import express from 'express';
-import { GoogleGenAI, Type } from '@google/genai';
+import { Type } from '@google/genai';
+import {
+  extractGeminiError,
+  generateGeminiContentWithFallback,
+  getConfiguredGeminiModels,
+} from './gemini.ts';
 import {
   fsCreateDoc,
   fsDeleteDoc,
@@ -39,64 +44,6 @@ import {
   fetchVerifiedKeywordMetrics,
   getKeywordProvidersStatus,
 } from './keywordProviders.ts';
-
-function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured on the server.');
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
-
-function extractGeminiError(err: unknown): { status: number; message: string } {
-  const rawMsg = err instanceof Error ? err.message : String(err);
-  try {
-    const parsed = JSON.parse(rawMsg);
-    const code = Number(parsed?.error?.code) || 500;
-    const msg = String(parsed?.error?.message || rawMsg);
-    return { status: code >= 400 && code < 600 ? code : 500, message: msg };
-  } catch {
-    if (rawMsg.includes('503') || rawMsg.toLowerCase().includes('unavailable')) {
-      return {
-        status: 503,
-        message: 'AI model is temporarily experiencing high demand. Please try again in a moment.',
-      };
-    }
-    if (rawMsg.includes('429') || rawMsg.toLowerCase().includes('resource_exhausted')) {
-      return {
-        status: 429,
-        message: 'Gemini API rate limit reached. Please wait briefly and try again.',
-      };
-    }
-    return { status: 500, message: rawMsg };
-  }
-}
-
-async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      const { status } = extractGeminiError(err);
-      const isTransient = status === 429 || status === 503 || status === 502;
-      if (!isTransient || attempt === maxAttempts) {
-        throw err;
-      }
-      const delayMs = 800 * Math.pow(2, attempt - 1);
-      await new Promise((r) => setTimeout(r, delayMs));
-    }
-  }
-  throw lastError;
-}
 
 const rateBuckets = new Map<string, number[]>();
 function createRateLimiter(limit: number, windowMs: number) {
@@ -149,13 +96,16 @@ export function createApp() {
     }
     const psiKeyCfg = getPageSpeedKeyConfig();
     const psiQuota = getPsiQuotaStatus();
+    const geminiModels = getConfiguredGeminiModels();
     res.json({
       ok: true,
       service: 'RankPilot AI',
       timestamp: new Date().toISOString(),
       firebase: firebaseMeta,
       capabilities: {
-        geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+        geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+        geminiPrimaryModel: geminiModels.primaryModel,
+        geminiFallbackModels: geminiModels.fallbackModels,
         dedicatedVaultKey: hasDedicatedEncryptionKey(),
         pageSpeedKeyConfigured: Boolean(psiKeyCfg.apiKey),
         pageSpeedKeySource: psiKeyCfg.source,
@@ -286,7 +236,6 @@ export function createApp() {
       let summary = `Technical scan completed for ${new URL(p.url).hostname} with a score of ${p.score}/100.`;
 
       try {
-        const ai = getGeminiClient();
         const prompt = `Analyze these real crawled technical SEO metrics for ${p.url} and produce prioritized, concrete recommendations:
 - Page Type: ${p.pageType}
 - HTTP Status: ${p.httpStatus}
@@ -302,36 +251,34 @@ export function createApp() {
 
 Provide a concise executive summary (max 2 sentences) and 4-6 specific actionable recommendations ordered by impact.`;
 
-        const aiResponse = await callGeminiWithRetry(() =>
-          ai.models.generateContent({
-            model: 'gemini-4-hydrogen',
-            contents: prompt,
-            config: {
-              systemInstruction: 'You are a principal technical SEO engineer. Give specific, grounded advice based strictly on the provided crawl metrics.',
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  summary: { type: Type.STRING },
-                  recommendations: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        priority: { type: Type.STRING },
-                        title: { type: Type.STRING },
-                        impact: { type: Type.STRING },
-                        actionSteps: { type: Type.STRING },
-                      },
-                      required: ['priority', 'title', 'impact', 'actionSteps'],
+        const { response: aiResponse } = await generateGeminiContentWithFallback({
+          operation: 'seo_analyze',
+          contents: prompt,
+          config: {
+            systemInstruction: 'You are a principal technical SEO engineer. Give specific, grounded advice based strictly on the provided crawl metrics.',
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                summary: { type: Type.STRING },
+                recommendations: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      priority: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      impact: { type: Type.STRING },
+                      actionSteps: { type: Type.STRING },
                     },
+                    required: ['priority', 'title', 'impact', 'actionSteps'],
                   },
                 },
-                required: ['summary', 'recommendations'],
               },
+              required: ['summary', 'recommendations'],
             },
-          })
-        );
+          },
+        });
 
         const parsed = JSON.parse(aiResponse.text || '{}');
         if (parsed.summary) summary = String(parsed.summary).slice(0, 1900);
@@ -339,7 +286,8 @@ Provide a concise executive summary (max 2 sentences) and 4-6 specific actionabl
           recommendations = parsed.recommendations.slice(0, 10);
         }
       } catch (aiErr) {
-        console.error('Gemini SEO recommendation fallback:', aiErr);
+        const classified = extractGeminiError(aiErr);
+        console.warn('Gemini SEO recommendation fallback:', classified.status, classified.message);
         recommendations = [
           {
             priority: 'High',
@@ -526,11 +474,9 @@ Provide a concise executive summary (max 2 sentences) and 4-6 specific actionabl
         return;
       }
 
-      const ai = getGeminiClient();
-      const response = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: `Perform comprehensive SEO keyword discovery for:
+      const { response } = await generateGeminiContentWithFallback({
+        operation: 'keyword_discover',
+        contents: `Perform comprehensive SEO keyword discovery for:
 Seed / Topic (${sourceType}): "${cleanSeed}"
 Target Country: ${countryInfo.label} (${cleanCountry})
 Language: ${langInfo.label} (${cleanLanguage})
@@ -669,8 +615,7 @@ Requirements:
               ],
             },
           },
-        })
-      );
+      });
 
       const parsed = JSON.parse(response.text || '{}');
 
@@ -860,7 +805,10 @@ Requirements:
         suggestedTitles: (parsed.suggestedTitles || []).slice(0, 12),
       });
     } catch (err) {
-      const { status, message } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      if (retryAfterSeconds) {
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+      }
       res.status(status).json({ error: message });
     }
   });
@@ -888,11 +836,9 @@ Requirements:
       }
 
       const slice = pages.slice(0, 25);
-      const ai = getGeminiClient();
-      const response = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: `Analyze this inventory of pages, WooCommerce products, and categories on ${String(websiteDomain || 'the website').slice(0, 200)} (Market: ${targetMarket}).
+      const { response } = await generateGeminiContentWithFallback({
+        operation: 'keyword_map',
+        contents: `Analyze this inventory of pages, WooCommerce products, and categories on ${String(websiteDomain || 'the website').slice(0, 200)} (Market: ${targetMarket}).
 For each item:
 1. Recommend 1 unique primary target keyword and 2-3 secondary/long-tail supporting keywords tailored to its product name, description, and category.
 2. Classify search intent (Transactional, Commercial, Informational, Navigational).
@@ -956,8 +902,7 @@ ${slice
               required: ['mappings', 'cannibalizationAlerts'],
             },
           },
-        })
-      );
+      });
 
       const parsed = JSON.parse(response.text || '{}');
       res.json({
@@ -969,7 +914,10 @@ ${slice
           'Intent & competition tiers are AI-estimated. Connect Google Search Console or a verified volume provider for live metrics.',
       });
     } catch (err) {
-      const { status, message } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      if (retryAfterSeconds) {
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+      }
       res.status(status).json({ error: message });
     }
   });
@@ -1044,11 +992,9 @@ ${slice
       const countryLabel = COUNTRY_TARGETS[country.toUpperCase()]?.label || country;
       const langLabel = LANGUAGE_TARGETS[language.toLowerCase()]?.label || language;
 
-      const ai = getGeminiClient();
-      const response = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: `Analyze these publicly crawled competitor pages (Market: ${countryLabel} / ${langLabel}${
+      const { response } = await generateGeminiContentWithFallback({
+        operation: 'keyword_competitor',
+        contents: `Analyze these publicly crawled competitor pages (Market: ${countryLabel} / ${langLabel}${
             ownDomain ? `, Comparing for website: ${ownDomain}` : ''
           }):
 
@@ -1113,8 +1059,7 @@ CRITICAL: NEVER claim or guess the competitor's Google ranking positions, organi
               required: ['discoveredKeywords', 'contentGaps'],
             },
           },
-        })
-      );
+      });
 
       const parsed = JSON.parse(response.text || '{}');
       res.json({
@@ -1125,7 +1070,10 @@ CRITICAL: NEVER claim or guess the competitor's Google ranking positions, organi
           'Competitor headings and on-page text were crawled live. Actual Google ranking positions, search volumes, and organic traffic are unavailable without a connected SEO/SERP data provider.',
       });
     } catch (err) {
-      const { status, message } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      if (retryAfterSeconds) {
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+      }
       res.status(status).json({ error: message });
     }
   });
@@ -1178,12 +1126,10 @@ CRITICAL: NEVER claim or guess the competitor's Google ranking positions, organi
       }
 
       const inventoryList = (siteInventory || []).slice(0, 15);
-      const ai = getGeminiClient();
 
-      const response = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: `Create a conversion-oriented, search-optimized SEO upgrade package for this ${entityType || 'page'}:
+      const { response } = await generateGeminiContentWithFallback({
+        operation: 'seo_optimize',
+        contents: `Create a conversion-oriented, search-optimized SEO upgrade package for this ${entityType || 'page'}:
 URL: ${targetUrl}
 Target Keyword: "${targetKeyword || currentTitle}"
 Current Title / Name: "${currentTitle}"
@@ -1257,8 +1203,7 @@ Requirements:
               ],
             },
           },
-        })
-      );
+      });
 
       const parsed = JSON.parse(response.text || '{}');
       const allowedUrls = new Set(inventoryList.map((i) => i.url));
@@ -1305,7 +1250,10 @@ Requirements:
         aiNotes: String(parsed.aiNotes || '').slice(0, 2000),
       });
     } catch (err) {
-      const { status, message } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      if (retryAfterSeconds) {
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+      }
       res.status(status).json({ error: message });
     }
   });
@@ -2557,11 +2505,9 @@ Requirements:
         return;
       }
 
-      const ai = getGeminiClient();
-      const response = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: `Analyze all available SEO telemetry for website ${String(domain).slice(0, 200)} and synthesize 6 to 8 prioritized, high-leverage SEO action items.
+      const { response } = await generateGeminiContentWithFallback({
+        operation: 'ai_recommendations',
+        contents: `Analyze all available SEO telemetry for website ${String(domain).slice(0, 200)} and synthesize 6 to 8 prioritized, high-leverage SEO action items.
 
 REAL WORKSPACE TELEMETRY:
 ${String(contextSummary || 'No prior audit data supplied; analyze core site fundamentals.').slice(0, 12000)}
@@ -2608,8 +2554,7 @@ Rules:
               required: ['recommendations'],
             },
           },
-        })
-      );
+      });
 
       const parsed = JSON.parse(response.text || '{}');
       const allowedCats = new Set(['technical', 'on_page', 'keyword', 'content', 'internal_linking']);
@@ -2655,7 +2600,10 @@ Rules:
 
       res.json({ createdCount: createdIds.length, createdIds });
     } catch (err) {
-      const { status, message } = extractGeminiError(err);
+      const { status, message, retryAfterSeconds } = extractGeminiError(err);
+      if (retryAfterSeconds) {
+        res.setHeader('Retry-After', String(retryAfterSeconds));
+      }
       res.status(status).json({ error: message });
     }
   });
