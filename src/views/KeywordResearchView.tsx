@@ -77,6 +77,15 @@ const LANGUAGE_OPTIONS = [
 type ResearchTab = 'discovery' | 'clusters' | 'opportunities' | 'mapping' | 'competitor' | 'providers';
 type SortField = 'keyword' | 'searchVolume' | 'keywordDifficulty' | 'intent' | 'cpc' | 'country' | 'opportunityScore';
 
+const TAB_BENEFIT_DESCRIPTIONS: Record<ResearchTab, string> = {
+  discovery: 'Discover relevant keywords and uncover new SEO growth opportunities.',
+  clusters: 'Group related keywords and plan content that targets the right search intent.',
+  opportunities: 'Identify high-potential SEO opportunities and prioritize your next actions.',
+  mapping: 'Match keywords to products and pages to improve SEO targeting.',
+  competitor: 'Analyze competitor content to discover keywords and missing topics.',
+  providers: 'Monitor connected SEO data sources and available keyword metrics.',
+};
+
 function escapeCsvCell(val: unknown): string {
   const s = val === null || val === undefined ? '' : String(val);
   if (/[",\n\r]/.test(s)) {
@@ -580,34 +589,41 @@ export function KeywordResearchView({
         </button>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-200/70 p-1 dark:bg-slate-800">
-        {[
-          { id: 'discovery', label: 'Discovery & Metrics', icon: Search },
-          { id: 'clusters', label: 'Clusters & Content', icon: FolderTree },
-          { id: 'opportunities', label: 'Opportunity Analysis', icon: TrendingUp },
-          { id: 'mapping', label: `WooCommerce & Page Map (${inventoryPages.length})`, icon: MapPin },
-          { id: 'competitor', label: 'Competitor URLs', icon: Globe },
-          { id: 'providers', label: 'Data Providers', icon: Database },
-        ].map((item) => {
-          const Icon = item.icon;
-          const active = tab === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setTab(item.id as ResearchTab)}
-              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                active
-                  ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
+      {/* Navigation Tabs & Active Tab Benefit */}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-200/70 p-1 dark:bg-slate-800">
+          {[
+            { id: 'discovery', label: 'Discovery & Metrics', icon: Search },
+            { id: 'clusters', label: 'Clusters & Content', icon: FolderTree },
+            { id: 'opportunities', label: 'Opportunity Analysis', icon: TrendingUp },
+            { id: 'mapping', label: `WooCommerce & Page Map (${inventoryPages.length})`, icon: MapPin },
+            { id: 'competitor', label: 'Competitor URLs', icon: Globe },
+            { id: 'providers', label: 'Data Providers', icon: Database },
+          ].map((item) => {
+            const Icon = item.icon;
+            const active = tab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTab(item.id as ResearchTab)}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                  active
+                    ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-start sm:items-center gap-2 rounded-lg border border-slate-200/80 bg-white/80 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
+          <Info className="mt-0.5 sm:mt-0 h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />
+          <span className="leading-relaxed">{TAB_BENEFIT_DESCRIPTIONS[tab]}</span>
+        </div>
       </div>
 
       {error && <ErrorBanner message={error} />}
