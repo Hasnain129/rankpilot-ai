@@ -5,8 +5,9 @@ import { classifyGeminiError, getConfiguredGeminiModels, getGeminiClient } from 
 const MAX_LIST_PAGES = 3;
 const MAX_LIST_MODELS = 120;
 const MAX_TEST_MODELS = 4;
-const PER_CALL_TIMEOUT_MS = 8_000;
-const TOTAL_DIAGNOSTIC_BUDGET_MS = 40_000;
+const MIN_GEMINI_DEADLINE_MS = 10_000;
+const PER_CALL_TIMEOUT_MS = 30_000;
+const TOTAL_DIAGNOSTIC_BUDGET_MS = 120_000;
 
 const SAFE_MODEL_ID_RE = /^[a-zA-Z0-9._-]{2,80}$/;
 
@@ -75,6 +76,7 @@ export interface GeminiDiagnosticReport {
     workingTextModels: string[];
     workingStructuredJsonModels: string[];
     unavailable503Models: string[];
+    skippedUnlistedModels: string[];
     otherFailedModels: Array<{ model: string; status: number; apiStatus: string }>;
     budgetExhausted: boolean;
   };
@@ -154,7 +156,10 @@ function isLikelyTextGenerationModel(modelId: string): boolean {
   return !NON_TEXT_MODEL_PATTERNS.some((pat) => lower.includes(pat));
 }
 
-function sanitizeDiagnosticError(err: unknown): {
+function sanitizeDiagnosticError(
+  err: unknown,
+  timeoutMsUsed: number = PER_CALL_TIMEOUT_MS
+): {
   status: number;
   apiStatus: string;
   errorReason: string;
@@ -169,7 +174,7 @@ function sanitizeDiagnosticError(err: unknown): {
     return {
       status: 504,
       apiStatus: 'DEADLINE_EXCEEDED',
-      errorReason: `Timed out after ${PER_CALL_TIMEOUT_MS}ms.`,
+      errorReason: `Timed out after ${Math.round(timeoutMsUsed / 1000)}s.`,
     };
   }
 
@@ -186,52 +191,87 @@ function sanitizeDiagnosticError(err: unknown): {
   };
 }
 
+function getModelPreferenceScore(id: string): number {
+  const lower = id.toLowerCase();
+  if (lower.includes('latest')) return 100;
+  if (lower.startsWith('gemini-4-hydrogen')) return 1;
+  if (lower.startsWith('gemini-4-')) return 2;
+  if (lower.startsWith('gemini-3.8-flash')) return 3;
+  if (lower.startsWith('gemini-3.5-flash')) return 4;
+  if (lower.startsWith('gemini-3.1-flash-lite')) return 5;
+  if (lower.startsWith('gemini-3')) return 6;
+  if (lower.startsWith('gemini-2.5-flash-lite')) return 12;
+  if (lower.startsWith('gemini-2.5-flash')) return 10;
+  if (lower.startsWith('gemini-2.5-pro')) return 14;
+  if (lower.startsWith('gemini-2.5')) return 15;
+  return 30;
+}
+
 function selectCandidateModels(
   configuredPrimary: string,
   configuredFallbacks: string[],
   listedGenerateContentModels: string[],
   requestedModels?: string[]
-): string[] {
+): { modelsToTest: string[]; skippedUnlistedModels: string[] } {
+  const listedSet = new Set(listedGenerateContentModels);
+  const skippedUnlistedModels: string[] = [];
+
+  if (listedGenerateContentModels.length === 0) {
+    return { modelsToTest: [], skippedUnlistedModels };
+  }
+
   if (Array.isArray(requestedModels) && requestedModels.length > 0) {
-    const validated = requestedModels
-      .map((m) => normalizeModelId(m))
-      .filter((m) => SAFE_MODEL_ID_RE.test(m));
-    return Array.from(new Set(validated)).slice(0, MAX_TEST_MODELS);
+    const selected: string[] = [];
+    for (const raw of requestedModels) {
+      const normalized = normalizeModelId(raw);
+      if (!SAFE_MODEL_ID_RE.test(normalized)) continue;
+      if (listedSet.has(normalized)) {
+        if (!selected.includes(normalized)) selected.push(normalized);
+      } else if (!skippedUnlistedModels.includes(normalized)) {
+        skippedUnlistedModels.push(normalized);
+      }
+    }
+    return {
+      modelsToTest: selected.slice(0, MAX_TEST_MODELS),
+      skippedUnlistedModels,
+    };
   }
 
   const candidates: string[] = [];
-  const push = (id: string) => {
+  const pushIfListed = (id: string) => {
     const normalized = normalizeModelId(id);
-    if (normalized && SAFE_MODEL_ID_RE.test(normalized) && !candidates.includes(normalized)) {
+    if (!normalized || !SAFE_MODEL_ID_RE.test(normalized)) return;
+    if (!listedSet.has(normalized)) {
+      if (!skippedUnlistedModels.includes(normalized)) {
+        skippedUnlistedModels.push(normalized);
+      }
+      return;
+    }
+    if (!candidates.includes(normalized)) {
       candidates.push(normalized);
     }
   };
 
-  push(configuredPrimary);
+  pushIfListed(configuredPrimary);
   for (const fb of configuredFallbacks) {
-    push(fb);
+    pushIfListed(fb);
   }
 
-  // Prefer stable/preview flash/lite/pro text models from models.list()
   const rankedListed = listedGenerateContentModels
     .filter((id) => isLikelyTextGenerationModel(id))
-    .sort((a, b) => {
-      const score = (id: string) => {
-        if (id.includes('flash-lite')) return 1;
-        if (id.includes('flash')) return 2;
-        if (id.includes('hydrogen')) return 3;
-        if (id.includes('pro')) return 4;
-        return 5;
-      };
-      return score(a) - score(b) || a.localeCompare(b);
-    });
+    .sort((a, b) => getModelPreferenceScore(a) - getModelPreferenceScore(b) || a.localeCompare(b));
 
   for (const listedId of rankedListed) {
     if (candidates.length >= MAX_TEST_MODELS) break;
-    push(listedId);
+    if (!candidates.includes(listedId)) {
+      candidates.push(listedId);
+    }
   }
 
-  return candidates.slice(0, MAX_TEST_MODELS);
+  return {
+    modelsToTest: candidates.slice(0, MAX_TEST_MODELS),
+    skippedUnlistedModels,
+  };
 }
 
 export interface RunDiagnosticOptions {
@@ -244,13 +284,14 @@ export interface RunDiagnosticOptions {
 export async function runGeminiAvailabilityDiagnostic(
   options: RunDiagnosticOptions = {}
 ): Promise<GeminiDiagnosticReport> {
+  // Never force a deadline below Gemini API's 10s minimum permitted deadline.
   const perCallTimeoutMs = Math.min(
-    10_000,
-    Math.max(1_000, options.perCallTimeoutMs ?? PER_CALL_TIMEOUT_MS)
+    30_000,
+    Math.max(MIN_GEMINI_DEADLINE_MS, options.perCallTimeoutMs ?? PER_CALL_TIMEOUT_MS)
   );
   const totalBudgetMs = Math.min(
-    45_000,
-    Math.max(5_000, options.totalBudgetMs ?? TOTAL_DIAGNOSTIC_BUDGET_MS)
+    180_000,
+    Math.max(perCallTimeoutMs, options.totalBudgetMs ?? TOTAL_DIAGNOSTIC_BUDGET_MS)
   );
   const startedAt = Date.now();
   const ai = options.client ?? getGeminiClient();
@@ -285,7 +326,7 @@ export async function runGeminiAvailabilityDiagnostic(
     }
     modelsListSuccess = true;
   } catch (err) {
-    const sanitized = sanitizeDiagnosticError(err);
+    const sanitized = sanitizeDiagnosticError(err, perCallTimeoutMs);
     modelsListSuccess = false;
     modelsListStatus = sanitized.status;
     modelsListApiStatus = sanitized.apiStatus;
@@ -293,32 +334,43 @@ export async function runGeminiAvailabilityDiagnostic(
   }
   const modelsListLatencyMs = Date.now() - listStart;
 
-  const generateContentModels = Array.from(
-    new Set(
-      listedModels
-        .filter((m) => Array.isArray(m.supportedActions) && m.supportedActions.includes('generateContent'))
-        .map((m) => normalizeModelId(m.name))
-        .filter((id) => id.length > 0)
-    )
-  ).sort();
+  const generateContentModels = modelsListSuccess
+    ? Array.from(
+        new Set(
+          listedModels
+            .filter(
+              (m) => Array.isArray(m.supportedActions) && m.supportedActions.includes('generateContent')
+            )
+            .map((m) => normalizeModelId(m.name))
+            .filter((id) => id.length > 0)
+        )
+      ).sort()
+    : [];
 
   const listedSet = new Set(generateContentModels);
-  const modelsToTest = selectCandidateModels(
-    configured.primaryModel,
-    configured.fallbackModels,
-    generateContentModels,
-    options.requestedModels
-  );
+  const { modelsToTest, skippedUnlistedModels } = modelsListSuccess
+    ? selectCandidateModels(
+        configured.primaryModel,
+        configured.fallbackModels,
+        generateContentModels,
+        options.requestedModels
+      )
+    : { modelsToTest: [], skippedUnlistedModels: [] };
 
-  // Step 2: Run bounded minimal text + structured JSON checks on selected models
+  // Step 2: Run bounded minimal text + structured JSON checks strictly on catalog-verified models
   const modelTests: DiagnosticModelResult[] = [];
   let budgetExhausted = false;
 
   for (const model of modelsToTest) {
-    if (Date.now() - startedAt > totalBudgetMs - perCallTimeoutMs) {
+    const remainingForText = totalBudgetMs - (Date.now() - startedAt);
+    if (remainingForText < MIN_GEMINI_DEADLINE_MS) {
       budgetExhausted = true;
       break;
     }
+    const textTimeoutMs = Math.max(
+      MIN_GEMINI_DEADLINE_MS,
+      Math.min(perCallTimeoutMs, remainingForText)
+    );
 
     // 2a. Plain text check: "Return the word OK."
     const textStart = Date.now();
@@ -328,8 +380,8 @@ export async function runGeminiAvailabilityDiagnostic(
         model,
         contents: 'Return the word OK.',
         config: {
-          abortSignal: AbortSignal.timeout(perCallTimeoutMs),
-          httpOptions: { timeout: perCallTimeoutMs },
+          abortSignal: AbortSignal.timeout(textTimeoutMs),
+          httpOptions: { timeout: textTimeoutMs },
         },
       });
       const text = String(resp.text || '').trim();
@@ -341,7 +393,7 @@ export async function runGeminiAvailabilityDiagnostic(
         outputPreview: text.slice(0, 40) || '(empty)',
       };
     } catch (err) {
-      const sanitized = sanitizeDiagnosticError(err);
+      const sanitized = sanitizeDiagnosticError(err, textTimeoutMs);
       textTest = {
         success: false,
         status: sanitized.status,
@@ -353,7 +405,12 @@ export async function runGeminiAvailabilityDiagnostic(
 
     // 2b. Structured JSON check: responseMimeType: "application/json"
     let structuredJsonTest: DiagnosticCallResult | null = null;
-    if (Date.now() - startedAt <= totalBudgetMs - Math.min(3_000, perCallTimeoutMs)) {
+    const remainingForJson = totalBudgetMs - (Date.now() - startedAt);
+    if (remainingForJson >= MIN_GEMINI_DEADLINE_MS) {
+      const jsonTimeoutMs = Math.max(
+        MIN_GEMINI_DEADLINE_MS,
+        Math.min(perCallTimeoutMs, remainingForJson)
+      );
       const jsonStart = Date.now();
       try {
         const resp = await ai.models.generateContent({
@@ -368,8 +425,8 @@ export async function runGeminiAvailabilityDiagnostic(
               },
               required: ['ok'],
             },
-            abortSignal: AbortSignal.timeout(perCallTimeoutMs),
-            httpOptions: { timeout: perCallTimeoutMs },
+            abortSignal: AbortSignal.timeout(jsonTimeoutMs),
+            httpOptions: { timeout: jsonTimeoutMs },
           },
         });
         const rawText = String(resp.text || '').trim();
@@ -389,7 +446,7 @@ export async function runGeminiAvailabilityDiagnostic(
           outputPreview: rawText.slice(0, 60) || '(empty)',
         };
       } catch (err) {
-        const sanitized = sanitizeDiagnosticError(err);
+        const sanitized = sanitizeDiagnosticError(err, jsonTimeoutMs);
         structuredJsonTest = {
           success: false,
           status: sanitized.status,
@@ -416,21 +473,30 @@ export async function runGeminiAvailabilityDiagnostic(
     .filter((m) => m.structuredJsonTest?.success)
     .map((m) => m.model);
   const unavailable503Models = modelTests
-    .filter(
-      (m) => m.textTest.status === 503 || m.structuredJsonTest?.status === 503
-    )
+    .filter((m) => m.textTest.status === 503 || m.structuredJsonTest?.status === 503)
     .map((m) => m.model);
   const otherFailedModels = modelTests
-    .filter(
-      (m) =>
-        !m.textTest.success &&
-        m.textTest.status !== 503
-    )
-    .map((m) => ({
-      model: m.model,
-      status: m.textTest.status,
-      apiStatus: m.textTest.apiStatus,
-    }));
+    .flatMap((m) => {
+      const failures: Array<{ model: string; status: number; apiStatus: string }> = [];
+      if (!m.textTest.success && m.textTest.status !== 503) {
+        failures.push({
+          model: m.model,
+          status: m.textTest.status,
+          apiStatus: m.textTest.apiStatus,
+        });
+      } else if (
+        m.structuredJsonTest &&
+        !m.structuredJsonTest.success &&
+        m.structuredJsonTest.status !== 503
+      ) {
+        failures.push({
+          model: m.model,
+          status: m.structuredJsonTest.status,
+          apiStatus: m.structuredJsonTest.apiStatus,
+        });
+      }
+      return failures;
+    });
 
   return {
     diagnosticEnabled: true,
@@ -462,6 +528,7 @@ export async function runGeminiAvailabilityDiagnostic(
       workingTextModels,
       workingStructuredJsonModels,
       unavailable503Models,
+      skippedUnlistedModels,
       otherFailedModels,
       budgetExhausted,
     },

@@ -29,6 +29,12 @@ interface GeminiDiagnosticReport {
     fallbackModels: string[];
     unchanged: true;
   };
+  limits?: {
+    maxModelsTested: number;
+    maxCallsPerModel: number;
+    perCallTimeoutMs: number;
+    totalBudgetMs: number;
+  };
   modelsList: {
     success: boolean;
     status: number;
@@ -44,6 +50,7 @@ interface GeminiDiagnosticReport {
     workingTextModels: string[];
     workingStructuredJsonModels: string[];
     unavailable503Models: string[];
+    skippedUnlistedModels?: string[];
     otherFailedModels: Array<{ model: string; status: number; apiStatus: string }>;
     budgetExhausted: boolean;
   };
@@ -59,23 +66,25 @@ interface DiagnosticEligibilityResponse {
   };
 }
 
-const CLIENT_DIAGNOSTIC_TIMEOUT_MS = 48_000;
+const CLIENT_DIAGNOSTIC_TIMEOUT_MS = 125_000;
 
 function formatDiagnosticError(err: unknown): string {
   if (err instanceof DOMException && err.name === 'AbortError') {
-    return 'Diagnostic request timed out after 48 seconds before the server finished. Please try again.';
+    return 'Diagnostic request timed out after 125 seconds before the server finished. Please try again.';
   }
   if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
     return 'Diagnostic request timed out before completing. Please try again.';
   }
   if (err instanceof ApiRequestError) {
     switch (err.status) {
+      case 400:
+        return `Invalid diagnostic request or Gemini parameter error (400). ${err.message}`;
       case 401:
         return 'Authentication required or session expired (401). Sign in again with a verified Google account.';
       case 403:
         return 'Admin authorization denied (403). Your Firebase account is not authorized on the server admin allowlist.';
       case 404:
-        return 'Gemini diagnostic is currently disabled on the server (404). Set ENABLE_GEMINI_DIAGNOSTIC=true temporarily to enable it.';
+        return 'Gemini diagnostic is currently disabled or model not found (404). Verify ENABLE_GEMINI_DIAGNOSTIC=true on the server.';
       case 429:
         return 'Rate limit reached (429). Wait about 60 seconds before running the diagnostic again.';
       case 503:
@@ -87,6 +96,27 @@ function formatDiagnosticError(err: unknown): string {
     }
   }
   return err instanceof Error ? err.message : 'Unable to run Gemini diagnostic.';
+}
+
+function formatHttpStatusLabel(prefix: string, status: number): string {
+  switch (status) {
+    case 200:
+      return `${prefix}: 200 OK`;
+    case 400:
+      return `${prefix}: 400 Invalid`;
+    case 403:
+      return `${prefix}: 403 Forbidden`;
+    case 404:
+      return `${prefix}: 404 Not Found`;
+    case 429:
+      return `${prefix}: 429 Rate Limit`;
+    case 503:
+      return `${prefix}: 503 Unavailable`;
+    case 504:
+      return `${prefix}: 504 Timeout`;
+    default:
+      return `${prefix}: ${status}`;
+  }
 }
 
 function getHttpStatusBadgeTone(status: number): string {
@@ -227,6 +257,23 @@ export function GeminiDiagnosticCard() {
 
       {report && (
         <div className="space-y-4 pt-2 border-t border-slate-200 dark:border-slate-800">
+          {!report.modelsList.success && (
+            <ErrorBanner
+              message={`models.list() failed (${report.modelsList.status} ${report.modelsList.apiStatus}): ${
+                report.modelsList.errorReason || 'Unable to retrieve authenticated model catalog.'
+              }`}
+            />
+          )}
+
+          {report.summary.skippedUnlistedModels && report.summary.skippedUnlistedModels.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300">
+              Skipped models absent from authenticated <code className="font-mono">models.list()</code> catalog:{' '}
+              <code className="font-mono font-medium">
+                {report.summary.skippedUnlistedModels.join(', ')}
+              </code>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 text-xs">
             <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
               <div className="text-slate-500 dark:text-slate-400">models.list()</div>
@@ -272,43 +319,50 @@ export function GeminiDiagnosticCard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {report.modelTests.map((item) => {
-                  const textLatency = `${item.textTest.latencyMs} ms`;
-                  const jsonLatency = item.structuredJsonTest
-                    ? `${item.structuredJsonTest.latencyMs} ms`
-                    : '—';
+                {report.modelTests.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-4 text-center text-slate-500 dark:text-slate-400">
+                      No catalog-verified <code className="font-mono">generateContent</code> models were available to test.
+                    </td>
+                  </tr>
+                ) : (
+                  report.modelTests.map((item) => {
+                    const textLatency = `${item.textTest.latencyMs} ms`;
+                    const jsonLatency = item.structuredJsonTest
+                      ? `${item.structuredJsonTest.latencyMs} ms`
+                      : '—';
 
-                  return (
-                    <tr key={item.model} className="align-top">
-                      <td className="px-3 py-2.5">
-                        <div className="font-mono font-medium text-slate-900 dark:text-slate-100">
-                          {item.model}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500">
-                          {item.inModelsList ? 'In models.list()' : 'Configured (not listed)'}
-                        </div>
-                      </td>
+                    return (
+                      <tr key={item.model} className="align-top">
+                        <td className="px-3 py-2.5">
+                          <div className="font-mono font-medium text-slate-900 dark:text-slate-100">
+                            {item.model}
+                          </div>
+                          <div className="mt-0.5 text-[11px] text-slate-500">
+                            Verified in models.list()
+                          </div>
+                        </td>
 
-                      <td className="px-3 py-2.5 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
-                          <span
-                            className={`inline-flex w-fit items-center rounded border px-1.5 py-0.5 font-mono text-[11px] ${getHttpStatusBadgeTone(
-                              item.textTest.status
-                            )}`}
-                          >
-                            Text: {item.textTest.status}
-                          </span>
-                          {item.structuredJsonTest && (
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          <div className="flex flex-col gap-1">
                             <span
                               className={`inline-flex w-fit items-center rounded border px-1.5 py-0.5 font-mono text-[11px] ${getHttpStatusBadgeTone(
-                                item.structuredJsonTest.status
+                                item.textTest.status
                               )}`}
                             >
-                              JSON: {item.structuredJsonTest.status}
+                              {formatHttpStatusLabel('Text', item.textTest.status)}
                             </span>
-                          )}
-                        </div>
-                      </td>
+                            {item.structuredJsonTest && (
+                              <span
+                                className={`inline-flex w-fit items-center rounded border px-1.5 py-0.5 font-mono text-[11px] ${getHttpStatusBadgeTone(
+                                  item.structuredJsonTest.status
+                                )}`}
+                              >
+                                {formatHttpStatusLabel('JSON', item.structuredJsonTest.status)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
 
                       <td className="px-3 py-2.5">
                         <div className="flex items-start gap-1.5">
@@ -362,7 +416,8 @@ export function GeminiDiagnosticCard() {
                       </td>
                     </tr>
                   );
-                })}
+                })
+                )}
               </tbody>
             </table>
           </div>
