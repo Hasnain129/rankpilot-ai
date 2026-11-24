@@ -1,8 +1,36 @@
-import React, { useEffect, useState } from 'react';
-import { Activity, CheckCircle2, ChevronDown, ChevronUp, Loader2, XCircle } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Activity,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  RefreshCw,
+  Search,
+  XCircle,
+} from 'lucide-react';
 import { ApiRequestError, apiFetch } from '../../lib/apiClient';
 import { useAuth } from '../../context/AuthContext';
 import { ErrorBanner, StatusText } from '../ui/DataState';
+
+interface CatalogModelInfo {
+  id: string;
+  displayName?: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+}
+
+interface GeminiModelCatalogResult {
+  success: boolean;
+  status: number;
+  apiStatus: string;
+  latencyMs: number;
+  totalListed: number;
+  generateContentSupportedCount: number;
+  generateContentModels: string[];
+  models: CatalogModelInfo[];
+  errorReason?: string;
+}
 
 interface DiagnosticCallResult {
   success: boolean;
@@ -35,16 +63,7 @@ interface GeminiDiagnosticReport {
     perCallTimeoutMs: number;
     totalBudgetMs: number;
   };
-  modelsList: {
-    success: boolean;
-    status: number;
-    apiStatus: string;
-    latencyMs: number;
-    totalListed: number;
-    generateContentSupportedCount: number;
-    generateContentModels: string[];
-    errorReason?: string;
-  };
+  modelsList: GeminiModelCatalogResult;
   modelTests: DiagnosticModelResult[];
   summary: {
     workingTextModels: string[];
@@ -64,8 +83,10 @@ interface DiagnosticEligibilityResponse {
     primaryModel: string;
     fallbackModels: string[];
   };
+  catalog?: GeminiModelCatalogResult;
 }
 
+const MAX_SELECTABLE_MODELS = 4;
 const CLIENT_DIAGNOSTIC_TIMEOUT_MS = 125_000;
 
 function formatDiagnosticError(err: unknown): string {
@@ -129,55 +150,188 @@ function getHttpStatusBadgeTone(status: number): string {
   return 'text-red-700 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-950/40 dark:border-red-900/60';
 }
 
+function pickInitialCatalogSelection(
+  catalogModels: CatalogModelInfo[],
+  configured?: { primaryModel: string; fallbackModels: string[] }
+): string[] {
+  const availableIds = new Set(catalogModels.map((m) => m.id));
+  const picks: string[] = [];
+  const addIfAvailable = (id: string) => {
+    if (availableIds.has(id) && !picks.includes(id) && picks.length < MAX_SELECTABLE_MODELS) {
+      picks.push(id);
+    }
+  };
+
+  // Prioritize gemini-3.5-flash and gemini-3.6-flash when present in models.list()
+  addIfAvailable('gemini-3.5-flash');
+  addIfAvailable('gemini-3.6-flash');
+
+  if (configured) {
+    addIfAvailable(configured.primaryModel);
+    for (const fb of configured.fallbackModels) {
+      addIfAvailable(fb);
+    }
+  }
+
+  for (const m of catalogModels) {
+    if (picks.length >= MAX_SELECTABLE_MODELS) break;
+    const lower = m.id.toLowerCase();
+    if (
+      lower.startsWith('gemini-') &&
+      !lower.includes('embedding') &&
+      !lower.includes('image') &&
+      !lower.includes('tts') &&
+      !lower.includes('live') &&
+      !lower.includes('audio')
+    ) {
+      addIfAvailable(m.id);
+    }
+  }
+
+  return picks;
+}
+
 export function GeminiDiagnosticCard() {
   const { user } = useAuth();
   const isUiDisabled = import.meta.env.VITE_DISABLE_GEMINI_DIAGNOSTIC_UI === 'true';
 
   const [eligibility, setEligibility] = useState<DiagnosticEligibilityResponse | null>(null);
+  const [catalog, setCatalog] = useState<GeminiModelCatalogResult | null>(null);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [modelFilter, setModelFilter] = useState('');
   const [running, setRunning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [report, setReport] = useState<GeminiDiagnosticReport | null>(null);
   const [showListedModels, setShowListedModels] = useState(false);
 
+  const loadDiagnosticStatus = useCallback(
+    async (signal?: AbortSignal) => {
+      if (isUiDisabled || !user || !user.emailVerified) {
+        setEligibility(null);
+        setCatalog(null);
+        return;
+      }
+
+      setLoadingCatalog(true);
+      try {
+        const res = await apiFetch<DiagnosticEligibilityResponse>(
+          '/api/admin/gemini-diagnostic?includeCatalog=1',
+          {
+            method: 'GET',
+            signal,
+          }
+        );
+        if (signal?.aborted) return;
+
+        if (res.enabled && res.authorized) {
+          setEligibility(res);
+          if (res.catalog) {
+            setCatalog(res.catalog);
+            const catalogSet = new Set(res.catalog.models.map((m) => m.id));
+            setSelectedModels((prev) => {
+              const preserved = prev.filter((id) => catalogSet.has(id)).slice(0, MAX_SELECTABLE_MODELS);
+              return preserved.length > 0
+                ? preserved
+                : pickInitialCatalogSelection(res.catalog!.models, res.configured);
+            });
+          }
+        } else {
+          setEligibility(null);
+          setCatalog(null);
+        }
+      } catch (err) {
+        if (signal?.aborted) return;
+        // Fail closed on 401/403/404; only surface transient errors if already eligible
+        if (err instanceof ApiRequestError && (err.status === 401 || err.status === 403 || err.status === 404)) {
+          setEligibility(null);
+          setCatalog(null);
+        } else if (eligibility?.authorized) {
+          setErrorMsg(formatDiagnosticError(err));
+        } else {
+          setEligibility(null);
+          setCatalog(null);
+        }
+      } finally {
+        if (!signal?.aborted) {
+          setLoadingCatalog(false);
+        }
+      }
+    },
+    [isUiDisabled, user?.uid, user?.emailVerified, eligibility?.authorized]
+  );
+
   useEffect(() => {
     if (isUiDisabled || !user || !user.emailVerified) {
       setEligibility(null);
+      setCatalog(null);
       return;
     }
 
     const controller = new AbortController();
-    let active = true;
-
-    apiFetch<DiagnosticEligibilityResponse>('/api/admin/gemini-diagnostic', {
-      method: 'GET',
-      signal: controller.signal,
-    })
-      .then((res) => {
-        if (!active) return;
-        if (res.enabled && res.authorized) {
-          setEligibility(res);
-        } else {
-          setEligibility(null);
-        }
-      })
-      .catch(() => {
-        if (!active) return;
-        // Fail closed: keep button hidden for non-admins or when disabled.
-        setEligibility(null);
-      });
+    void loadDiagnosticStatus(controller.signal);
 
     return () => {
-      active = false;
       controller.abort();
     };
+    // Intentionally keyed to signed-in verified user identity
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isUiDisabled, user?.uid, user?.emailVerified]);
+
+  const catalogModels = catalog?.models ?? [];
+  const filteredCatalogModels = useMemo(() => {
+    const query = modelFilter.trim().toLowerCase();
+    if (!query) return catalogModels;
+    return catalogModels.filter(
+      (m) =>
+        m.id.toLowerCase().includes(query) ||
+        (m.displayName && m.displayName.toLowerCase().includes(query))
+    );
+  }, [catalogModels, modelFilter]);
+
+  const flash35Or36Available = useMemo(
+    () =>
+      catalogModels
+        .map((m) => m.id)
+        .filter((id) => id === 'gemini-3.5-flash' || id === 'gemini-3.6-flash'),
+    [catalogModels]
+  );
 
   if (isUiDisabled || !eligibility?.enabled || !eligibility?.authorized) {
     return null;
   }
 
+  const toggleModelSelection = (modelId: string) => {
+    setSelectedModels((prev) => {
+      if (prev.includes(modelId)) {
+        return prev.filter((id) => id !== modelId);
+      }
+      if (prev.length >= MAX_SELECTABLE_MODELS) {
+        return prev;
+      }
+      return [...prev, modelId];
+    });
+  };
+
+  const handleSelectFlash35And36 = () => {
+    if (flash35Or36Available.length === 0) return;
+    setSelectedModels(flash35Or36Available.slice(0, MAX_SELECTABLE_MODELS));
+  };
+
+  const handleSelectConfigured = () => {
+    if (!eligibility.configured) return;
+    const availableIds = new Set(catalogModels.map((m) => m.id));
+    const configuredListed = [
+      eligibility.configured.primaryModel,
+      ...eligibility.configured.fallbackModels,
+    ].filter((id, idx, arr) => availableIds.has(id) && arr.indexOf(id) === idx);
+    setSelectedModels(configuredListed.slice(0, MAX_SELECTABLE_MODELS));
+  };
+
   const handleRunDiagnostic = async () => {
-    if (running) return;
+    if (running || selectedModels.length === 0 || selectedModels.length > MAX_SELECTABLE_MODELS) {
+      return;
+    }
     setRunning(true);
     setErrorMsg(null);
 
@@ -187,10 +341,13 @@ export function GeminiDiagnosticCard() {
     try {
       const data = await apiFetch<GeminiDiagnosticReport>('/api/admin/gemini-diagnostic', {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ models: selectedModels }),
         signal: controller.signal,
       });
       setReport(data);
+      if (data.modelsList?.models) {
+        setCatalog(data.modelsList);
+      }
     } catch (err) {
       setErrorMsg(formatDiagnosticError(err));
     } finally {
@@ -211,8 +368,8 @@ export function GeminiDiagnosticCard() {
           </div>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             Temporary admin-only diagnostic using your server-side{' '}
-            <code className="font-mono">GEMINI_API_KEY</code>. Calls{' '}
-            <code className="font-mono">models.list()</code> and runs minimal text and structured JSON checks (max 4 models).
+            <code className="font-mono">GEMINI_API_KEY</code>. Select up to 4 models from the authenticated{' '}
+            <code className="font-mono">models.list()</code> catalog to run single-shot plain-text and structured JSON checks (30s timeout per call, no automatic retries).
           </p>
         </div>
         <StatusText label="Admin Only · Temporary" tone="info" />
@@ -233,11 +390,149 @@ export function GeminiDiagnosticCard() {
         </div>
       )}
 
+      {/* Authenticated generateContent model catalog selector (max 4) */}
+      <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3.5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+              Select Models to Test ({selectedModels.length} / {MAX_SELECTABLE_MODELS} selected)
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+              {catalog?.success
+                ? `${catalog.generateContentSupportedCount} generateContent models returned by models.list() (${catalog.latencyMs} ms)`
+                : catalog
+                ? `Catalog unavailable (${catalog.status} ${catalog.apiStatus})`
+                : 'Loading authenticated generateContent catalog...'}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {flash35Or36Available.length > 0 && (
+              <button
+                type="button"
+                onClick={handleSelectFlash35And36}
+                disabled={running}
+                className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 dark:border-indigo-900/60 dark:bg-indigo-950/40 dark:text-indigo-300"
+              >
+                Pick {flash35Or36Available.join(' + ')}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleSelectConfigured}
+              disabled={running || catalogModels.length === 0}
+              className="rounded border border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              Pick Configured
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedModels([])}
+              disabled={running || selectedModels.length === 0}
+              className="rounded border border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadDiagnosticStatus()}
+              disabled={loadingCatalog || running}
+              className="inline-flex items-center gap-1 rounded border border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <RefreshCw className={`h-3 w-3 ${loadingCatalog ? 'animate-spin' : ''}`} />
+              <span>Refresh Catalog</span>
+            </button>
+          </div>
+        </div>
+
+        {catalog && !catalog.success && (
+          <ErrorBanner
+            message={`models.list() failed (${catalog.status} ${catalog.apiStatus}): ${
+              catalog.errorReason || 'Unable to retrieve authenticated model catalog.'
+            }`}
+          />
+        )}
+
+        {catalogModels.length > 0 && (
+          <>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                value={modelFilter}
+                onChange={(e) => setModelFilter(e.target.value)}
+                placeholder="Filter generateContent models (e.g. gemini-3.5-flash, gemini-3.6-flash)..."
+                className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-1.5 text-xs outline-none focus:border-indigo-600 dark:border-slate-700 dark:bg-slate-800"
+              />
+            </div>
+
+            <div className="max-h-52 overflow-y-auto divide-y divide-slate-200 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+              {filteredCatalogModels.length === 0 ? (
+                <div className="px-3 py-3 text-center text-xs text-slate-500">
+                  No catalog models match &ldquo;{modelFilter}&rdquo;.
+                </div>
+              ) : (
+                filteredCatalogModels.map((model) => {
+                  const checked = selectedModels.includes(model.id);
+                  const limitReached = !checked && selectedModels.length >= MAX_SELECTABLE_MODELS;
+                  const isConfiguredPrimary = eligibility.configured?.primaryModel === model.id;
+                  const isConfiguredFallback = eligibility.configured?.fallbackModels.includes(model.id);
+
+                  return (
+                    <label
+                      key={model.id}
+                      className={`flex items-center justify-between gap-3 px-3 py-2 text-xs ${
+                        limitReached
+                          ? 'cursor-not-allowed opacity-50 bg-slate-50/60 dark:bg-slate-900/40'
+                          : 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={running || limitReached}
+                          onChange={() => toggleModelSelection(model.id)}
+                          className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-mono font-medium text-slate-900 dark:text-slate-100 truncate">
+                            {model.id}
+                          </div>
+                          {model.displayName && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                              {model.displayName}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {(isConfiguredPrimary || isConfiguredFallback) && (
+                        <span className="shrink-0 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                          {isConfiguredPrimary ? 'Configured Primary' : 'Configured Fallback'}
+                        </span>
+                      )}
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </>
+        )}
+
+        {selectedModels.length > 0 && (
+          <div className="text-[11px] text-slate-600 dark:text-slate-300">
+            Selected for test:{' '}
+            <code className="font-mono font-medium">{selectedModels.join(', ')}</code>
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button
           type="button"
           onClick={handleRunDiagnostic}
-          disabled={running}
+          disabled={running || loadingCatalog || selectedModels.length === 0}
           className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
         >
           {running ? (
@@ -245,7 +540,11 @@ export function GeminiDiagnosticCard() {
           ) : (
             <Activity className="h-3.5 w-3.5" />
           )}
-          <span>{running ? 'Running Gemini Diagnostic...' : 'Run Gemini Diagnostic'}</span>
+          <span>
+            {running
+              ? `Testing ${selectedModels.length} Selected Model(s)...`
+              : `Run Gemini Diagnostic (${selectedModels.length} selected)`}
+          </span>
         </button>
 
         <span className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -322,7 +621,7 @@ export function GeminiDiagnosticCard() {
                 {report.modelTests.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="px-3 py-4 text-center text-slate-500 dark:text-slate-400">
-                      No catalog-verified <code className="font-mono">generateContent</code> models were available to test.
+                      No catalog-verified <code className="font-mono">generateContent</code> models were tested.
                     </td>
                   </tr>
                 ) : (
@@ -364,59 +663,59 @@ export function GeminiDiagnosticCard() {
                           </div>
                         </td>
 
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-start gap-1.5">
-                          {item.textTest.success ? (
-                            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                          ) : (
-                            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
-                          )}
-                          <div>
-                            <div className="font-medium">
-                              {item.textTest.success ? 'Success' : item.textTest.apiStatus}
-                            </div>
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400 break-words max-w-[180px]">
-                              {item.textTest.success
-                                ? item.textTest.outputPreview || 'OK'
-                                : item.textTest.errorReason || 'Failed'}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-
-                      <td className="px-3 py-2.5">
-                        {item.structuredJsonTest ? (
+                        <td className="px-3 py-2.5">
                           <div className="flex items-start gap-1.5">
-                            {item.structuredJsonTest.success ? (
+                            {item.textTest.success ? (
                               <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                             ) : (
                               <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
                             )}
                             <div>
                               <div className="font-medium">
-                                {item.structuredJsonTest.success
-                                  ? 'Valid JSON'
-                                  : item.structuredJsonTest.apiStatus}
+                                {item.textTest.success ? 'Success' : item.textTest.apiStatus}
                               </div>
-                              <div className="text-[11px] text-slate-500 dark:text-slate-400 break-words max-w-[180px]">
-                                {item.structuredJsonTest.success
-                                  ? item.structuredJsonTest.outputPreview
-                                  : item.structuredJsonTest.errorReason || 'Invalid or failed'}
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 break-words max-w-[200px]">
+                                {item.textTest.success
+                                  ? item.textTest.outputPreview || 'OK'
+                                  : item.textTest.errorReason || 'Failed'}
                               </div>
                             </div>
                           </div>
-                        ) : (
-                          <span className="text-slate-400">Skipped (budget limit)</span>
-                        )}
-                      </td>
+                        </td>
 
-                      <td className="px-3 py-2.5 text-right font-mono whitespace-nowrap text-slate-600 dark:text-slate-300">
-                        <div>{textLatency}</div>
-                        <div className="text-[11px] text-slate-500">{jsonLatency}</div>
-                      </td>
-                    </tr>
-                  );
-                })
+                        <td className="px-3 py-2.5">
+                          {item.structuredJsonTest ? (
+                            <div className="flex items-start gap-1.5">
+                              {item.structuredJsonTest.success ? (
+                                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                              ) : (
+                                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
+                              )}
+                              <div>
+                                <div className="font-medium">
+                                  {item.structuredJsonTest.success
+                                    ? 'Valid JSON'
+                                    : item.structuredJsonTest.apiStatus}
+                                </div>
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400 break-words max-w-[200px]">
+                                  {item.structuredJsonTest.success
+                                    ? item.structuredJsonTest.outputPreview
+                                    : item.structuredJsonTest.errorReason || 'Invalid or failed'}
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">Skipped (budget limit)</span>
+                          )}
+                        </td>
+
+                        <td className="px-3 py-2.5 text-right font-mono whitespace-nowrap text-slate-600 dark:text-slate-300">
+                          <div>{textLatency}</div>
+                          <div className="text-[11px] text-slate-500">{jsonLatency}</div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

@@ -29,6 +29,25 @@ const NON_TEXT_MODEL_PATTERNS = [
   'aqa',
 ];
 
+export interface CatalogModelInfo {
+  id: string;
+  displayName?: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+}
+
+export interface GeminiModelCatalogResult {
+  success: boolean;
+  status: number;
+  apiStatus: string;
+  latencyMs: number;
+  totalListed: number;
+  generateContentSupportedCount: number;
+  generateContentModels: string[];
+  models: CatalogModelInfo[];
+  errorReason?: string;
+}
+
 export interface DiagnosticCallResult {
   success: boolean;
   status: number;
@@ -61,16 +80,7 @@ export interface GeminiDiagnosticReport {
     totalBudgetMs: number;
     modelsListCap: number;
   };
-  modelsList: {
-    success: boolean;
-    status: number;
-    apiStatus: string;
-    latencyMs: number;
-    totalListed: number;
-    generateContentSupportedCount: number;
-    generateContentModels: string[];
-    errorReason?: string;
-  };
+  modelsList: GeminiModelCatalogResult;
   modelTests: DiagnosticModelResult[];
   summary: {
     workingTextModels: string[];
@@ -156,6 +166,27 @@ function isLikelyTextGenerationModel(modelId: string): boolean {
   return !NON_TEXT_MODEL_PATTERNS.some((pat) => lower.includes(pat));
 }
 
+function redactSecrets(input: string): string {
+  return input
+    .replace(/AIza[0-9A-Za-z_-]{10,}/g, '[REDACTED]')
+    .replace(/AQ\.[0-9A-Za-z_-]{10,}/g, '[REDACTED]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+    .replace(/([?&]key=)[^&\s]+/gi, '$1[REDACTED]');
+}
+
+function extractRawApiErrorMessage(err: unknown): string {
+  const rawMsg = err instanceof Error ? err.message : String(err);
+  try {
+    const parsed = JSON.parse(rawMsg) as { error?: { message?: string } };
+    if (typeof parsed?.error?.message === 'string' && parsed.error.message.trim()) {
+      return parsed.error.message.trim();
+    }
+  } catch {
+    // Not a JSON-wrapped error; use raw message if short and readable.
+  }
+  return rawMsg.trim();
+}
+
 function sanitizeDiagnosticError(
   err: unknown,
   timeoutMsUsed: number = PER_CALL_TIMEOUT_MS
@@ -179,10 +210,8 @@ function sanitizeDiagnosticError(
   }
 
   const classified = classifyGeminiError(err);
-  const safeReason = classified.message
-    .replace(/AIza[0-9A-Za-z_-]{10,}/g, '[REDACTED]')
-    .replace(/AQ\.[0-9A-Za-z_-]{10,}/g, '[REDACTED]')
-    .slice(0, 180);
+  const rawApiDetail = redactSecrets(extractRawApiErrorMessage(err));
+  const safeReason = (rawApiDetail || redactSecrets(classified.message)).slice(0, 220);
 
   return {
     status: classified.status,
@@ -281,28 +310,20 @@ export interface RunDiagnosticOptions {
   totalBudgetMs?: number;
 }
 
-export async function runGeminiAvailabilityDiagnostic(
-  options: RunDiagnosticOptions = {}
-): Promise<GeminiDiagnosticReport> {
-  // Never force a deadline below Gemini API's 10s minimum permitted deadline.
+export async function listAvailableGenerateContentModels(
+  options: { client?: GoogleGenAI; perCallTimeoutMs?: number } = {}
+): Promise<GeminiModelCatalogResult> {
   const perCallTimeoutMs = Math.min(
     30_000,
     Math.max(MIN_GEMINI_DEADLINE_MS, options.perCallTimeoutMs ?? PER_CALL_TIMEOUT_MS)
   );
-  const totalBudgetMs = Math.min(
-    180_000,
-    Math.max(perCallTimeoutMs, options.totalBudgetMs ?? TOTAL_DIAGNOSTIC_BUDGET_MS)
-  );
-  const startedAt = Date.now();
   const ai = options.client ?? getGeminiClient();
-  const configured = getConfiguredGeminiModels();
 
-  // Step 1: Call models.list() to discover models supporting generateContent
   const listStart = Date.now();
-  let modelsListSuccess = false;
-  let modelsListStatus = 200;
-  let modelsListApiStatus = 'OK';
-  let modelsListErrorReason: string | undefined;
+  let success = false;
+  let status = 200;
+  let apiStatus = 'OK';
+  let errorReason: string | undefined;
   const listedModels: Model[] = [];
 
   try {
@@ -324,31 +345,76 @@ export async function runGeminiAvailabilityDiagnostic(
         break;
       }
     }
-    modelsListSuccess = true;
+    success = true;
   } catch (err) {
     const sanitized = sanitizeDiagnosticError(err, perCallTimeoutMs);
-    modelsListSuccess = false;
-    modelsListStatus = sanitized.status;
-    modelsListApiStatus = sanitized.apiStatus;
-    modelsListErrorReason = sanitized.errorReason;
+    success = false;
+    status = sanitized.status;
+    apiStatus = sanitized.apiStatus;
+    errorReason = sanitized.errorReason;
   }
-  const modelsListLatencyMs = Date.now() - listStart;
 
-  const generateContentModels = modelsListSuccess
-    ? Array.from(
-        new Set(
-          listedModels
-            .filter(
-              (m) => Array.isArray(m.supportedActions) && m.supportedActions.includes('generateContent')
-            )
-            .map((m) => normalizeModelId(m.name))
-            .filter((id) => id.length > 0)
-        )
-      ).sort()
-    : [];
+  const latencyMs = Date.now() - listStart;
+  const modelMap = new Map<string, CatalogModelInfo>();
+  if (success) {
+    for (const m of listedModels) {
+      if (!Array.isArray(m.supportedActions) || !m.supportedActions.includes('generateContent')) {
+        continue;
+      }
+      const id = normalizeModelId(m.name);
+      if (!id || modelMap.has(id)) continue;
+      modelMap.set(id, {
+        id,
+        ...(typeof m.displayName === 'string' && m.displayName.trim()
+          ? { displayName: m.displayName.trim().slice(0, 120) }
+          : {}),
+        ...(typeof m.inputTokenLimit === 'number' ? { inputTokenLimit: m.inputTokenLimit } : {}),
+        ...(typeof m.outputTokenLimit === 'number' ? { outputTokenLimit: m.outputTokenLimit } : {}),
+      });
+    }
+  }
 
+  const models = Array.from(modelMap.values()).sort((a, b) => a.id.localeCompare(b.id));
+  const generateContentModels = models.map((m) => m.id);
+
+  return {
+    success,
+    status,
+    apiStatus,
+    latencyMs,
+    totalListed: listedModels.length,
+    generateContentSupportedCount: generateContentModels.length,
+    generateContentModels,
+    models,
+    ...(errorReason ? { errorReason } : {}),
+  };
+}
+
+export async function runGeminiAvailabilityDiagnostic(
+  options: RunDiagnosticOptions = {}
+): Promise<GeminiDiagnosticReport> {
+  // Never force a deadline below Gemini API's 10s minimum permitted deadline.
+  const perCallTimeoutMs = Math.min(
+    30_000,
+    Math.max(MIN_GEMINI_DEADLINE_MS, options.perCallTimeoutMs ?? PER_CALL_TIMEOUT_MS)
+  );
+  const totalBudgetMs = Math.min(
+    180_000,
+    Math.max(perCallTimeoutMs, options.totalBudgetMs ?? TOTAL_DIAGNOSTIC_BUDGET_MS)
+  );
+  const startedAt = Date.now();
+  const ai = options.client ?? getGeminiClient();
+  const configured = getConfiguredGeminiModels();
+
+  // Step 1: Call models.list() to discover models supporting generateContent
+  const modelsList = await listAvailableGenerateContentModels({
+    client: ai,
+    perCallTimeoutMs,
+  });
+
+  const generateContentModels = modelsList.generateContentModels;
   const listedSet = new Set(generateContentModels);
-  const { modelsToTest, skippedUnlistedModels } = modelsListSuccess
+  const { modelsToTest, skippedUnlistedModels } = modelsList.success
     ? selectCandidateModels(
         configured.primaryModel,
         configured.fallbackModels,
@@ -513,16 +579,7 @@ export async function runGeminiAvailabilityDiagnostic(
       totalBudgetMs,
       modelsListCap: MAX_LIST_MODELS,
     },
-    modelsList: {
-      success: modelsListSuccess,
-      status: modelsListStatus,
-      apiStatus: modelsListApiStatus,
-      latencyMs: modelsListLatencyMs,
-      totalListed: listedModels.length,
-      generateContentSupportedCount: generateContentModels.length,
-      generateContentModels,
-      ...(modelsListErrorReason ? { errorReason: modelsListErrorReason } : {}),
-    },
+    modelsList,
     modelTests,
     summary: {
       workingTextModels,

@@ -6,6 +6,7 @@ import {
   getConfiguredGeminiModels,
 } from './gemini.ts';
 import {
+  listAvailableGenerateContentModels,
   requireDiagnosticAdmin,
   runGeminiAvailabilityDiagnostic,
 } from './geminiDiagnostic.ts';
@@ -154,16 +155,27 @@ export function createApp() {
     requireFirebaseAuth,
     requireDiagnosticAdmin,
     diagnosticStatusLimiter,
-    (_req, res) => {
-      const configured = getConfiguredGeminiModels();
-      res.json({
-        enabled: true,
-        authorized: true,
-        configured: {
-          primaryModel: configured.primaryModel,
-          fallbackModels: configured.fallbackModels,
-        },
-      });
+    async (req, res) => {
+      try {
+        const configured = getConfiguredGeminiModels();
+        const includeCatalog =
+          req.query.includeCatalog === '1' || req.query.includeCatalog === 'true';
+        const catalog = includeCatalog
+          ? await listAvailableGenerateContentModels()
+          : undefined;
+        res.json({
+          enabled: true,
+          authorized: true,
+          configured: {
+            primaryModel: configured.primaryModel,
+            fallbackModels: configured.fallbackModels,
+          },
+          ...(catalog ? { catalog } : {}),
+        });
+      } catch (err) {
+        const { status, message } = extractGeminiError(err);
+        res.status(status).json({ error: message });
+      }
     }
   );
 
@@ -181,9 +193,10 @@ export function createApp() {
           if (
             !Array.isArray(rawModels) ||
             rawModels.length === 0 ||
-            rawModels.length > 4 ||
             rawModels.some(
-              (m) => typeof m !== 'string' || !/^[a-zA-Z0-9._-]{2,80}$/.test(m.trim().replace(/^models\//, ''))
+              (m) =>
+                typeof m !== 'string' ||
+                !/^[a-zA-Z0-9._-]{2,80}$/.test(m.trim().replace(/^models\//, ''))
             )
           ) {
             res.status(400).json({
@@ -191,7 +204,16 @@ export function createApp() {
             });
             return;
           }
-          requestedModels = rawModels.map((m) => String(m).trim());
+          const deduped = Array.from(
+            new Set(rawModels.map((m) => String(m).trim().replace(/^models\//, '')))
+          );
+          if (deduped.length === 0 || deduped.length > 4) {
+            res.status(400).json({
+              error: 'Optional "models" field must contain between 1 and 4 unique Gemini model IDs.',
+            });
+            return;
+          }
+          requestedModels = deduped;
         }
 
         const report = await runGeminiAvailabilityDiagnostic({ requestedModels });
