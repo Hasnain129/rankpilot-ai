@@ -324,6 +324,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         hadPendingRedirectLock &&
         !redirectSucceeded &&
         !resolvedUser &&
+        !auth.currentUser &&
         !redirectHadError &&
         !urlOAuthErr
       ) {
@@ -396,6 +397,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(firebaseUser);
       try {
         if (firebaseUser) {
+          setAuthRedirectError(null);
           const profilePath = `users/${firebaseUser.uid}`;
           try {
             const snap = await getDoc(doc(db, 'users', firebaseUser.uid));

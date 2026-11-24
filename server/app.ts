@@ -8,6 +8,7 @@ import {
   fsUpdateDoc,
   fsWriteSyncLog,
   getFirebaseConfig,
+  getPublicFirebaseClientConfig,
   requireFirebaseAuth,
 } from './firebaseAuth.ts';
 import { decryptSecrets, encryptSecrets, hasDedicatedEncryptionKey } from './cryptoVault.ts';
@@ -168,6 +169,18 @@ export function createApp() {
         connected: p.connected,
       })),
     });
+  });
+
+  app.get(['/__/firebase/init.json', '/api/firebase-init'], (req, res) => {
+    try {
+      const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+      const payload = getPublicFirebaseClientConfig(host || undefined);
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.json(payload);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Firebase configuration unavailable.';
+      res.status(500).json({ error: msg });
+    }
   });
 
   app.get('/api/keywords/providers', requireFirebaseAuth, (_req, res) => {

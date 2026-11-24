@@ -56,6 +56,47 @@ export function getFirebaseConfig(): FirebaseAppletConfig {
   throw new Error('Firebase configuration file or environment variables not found.');
 }
 
+export function getPublicFirebaseClientConfig(requestHost?: string) {
+  const baseCfg = getFirebaseConfig();
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidatePaths = [
+    path.resolve(process.cwd(), 'firebase-applet-config.json'),
+    path.resolve(currentDir, '..', 'firebase-applet-config.json'),
+  ];
+
+  let raw: Record<string, unknown> = {};
+  for (const candidate of candidatePaths) {
+    if (fs.existsSync(candidate)) {
+      raw = JSON.parse(fs.readFileSync(candidate, 'utf8')) as Record<string, unknown>;
+      break;
+    }
+  }
+
+  const envAuthDomain = process.env.VITE_FIREBASE_AUTH_DOMAIN?.trim() || '';
+  const defaultAuthDomain =
+    typeof raw.authDomain === 'string' && raw.authDomain
+      ? raw.authDomain
+      : `${baseCfg.projectId}.firebaseapp.com`;
+
+  const resolvedAuthDomain =
+    envAuthDomain && (!requestHost || requestHost === envAuthDomain)
+      ? envAuthDomain
+      : defaultAuthDomain;
+
+  return {
+    apiKey: baseCfg.apiKey,
+    appId: typeof raw.appId === 'string' ? raw.appId : '',
+    authDomain: resolvedAuthDomain,
+    measurementId: typeof raw.measurementId === 'string' ? raw.measurementId : '',
+    messagingSenderId: typeof raw.messagingSenderId === 'string' ? raw.messagingSenderId : '',
+    projectId: baseCfg.projectId,
+    storageBucket:
+      typeof raw.storageBucket === 'string' && raw.storageBucket
+        ? raw.storageBucket
+        : `${baseCfg.projectId}.firebasestorage.app`,
+  };
+}
+
 // Cached Google public X.509 certificates for Firebase Auth ID tokens
 let cachedCerts: { certs: Record<string, string>; expiresAt: number } | null = null;
 

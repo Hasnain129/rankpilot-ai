@@ -11,7 +11,7 @@
     },
     {
       "source": "/__/firebase/init.json",
-      "destination": "https://gen-lang-client-0459883385.firebaseapp.com/__/firebase/init.json"
+      "destination": "/api/firebase-init"
     },
     { "source": "/api/(.*)", "destination": "/api/index.ts" },
     { "source": "/(.*)", "destination": "/index.html" }
