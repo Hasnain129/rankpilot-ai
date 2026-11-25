@@ -1,9 +1,79 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, CheckCircle2, Globe, Lock, Mail, Moon, Sparkles, Sun, TrendingUp } from 'lucide-react';
+import {
+  ArrowRight,
+  BarChart3,
+  FileText,
+  Gauge,
+  Globe,
+  LayoutDashboard,
+  Lightbulb,
+  LineChart,
+  Lock,
+  Mail,
+  Moon,
+  Search,
+  ShoppingBag,
+  Sparkles,
+  Sun,
+  TrendingUp,
+} from 'lucide-react';
 import { FormattedAuthError, useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../context/ToastContext';
 import { firebaseConfigSummary } from '../lib/firebase';
+
+const LANDING_FEATURES = [
+  {
+    title: 'SEO Dashboard',
+    description: 'Track website SEO health and growth.',
+    icon: LayoutDashboard,
+  },
+  {
+    title: 'Website Audit',
+    description: 'Find SEO errors and improvement opportunities.',
+    icon: Globe,
+  },
+  {
+    title: 'Keyword Research',
+    description: 'Discover keywords, clusters and content gaps.',
+    icon: Search,
+  },
+  {
+    title: 'Google Rank Tracking',
+    description: 'Monitor verified Google search rankings.',
+    icon: TrendingUp,
+  },
+  {
+    title: 'On-Page SEO',
+    description: 'Optimize titles, descriptions and product pages.',
+    icon: FileText,
+  },
+  {
+    title: 'Technical SEO',
+    description: 'Check PageSpeed, Core Web Vitals and crawlability.',
+    icon: Gauge,
+  },
+  {
+    title: 'AI SEO Recommendations',
+    description: 'Get actionable AI-powered SEO suggestions.',
+    icon: Lightbulb,
+  },
+  {
+    title: 'SEO Reports',
+    description: 'Review and share SEO performance insights.',
+    icon: BarChart3,
+  },
+  {
+    title: 'GSC & GA4 Integration',
+    description: 'Connect Google search and analytics data.',
+    icon: LineChart,
+  },
+  {
+    title: 'WooCommerce SEO',
+    description: 'Review and sync approved product SEO changes.',
+    icon: ShoppingBag,
+  },
+] as const;
 
 export function AuthView() {
   const {
@@ -110,45 +180,22 @@ export function AuthView() {
         </div>
       </header>
 
-      <div className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 items-center gap-12 px-6 py-12 lg:grid-cols-12">
-        {/* Left Editorial Column */}
-        <div className="lg:col-span-7 space-y-6">
-          <div className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
-            RankPilot AI · Organic SEO Growth Platform
+      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10 sm:py-12">
+        <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-12 lg:gap-12">
+          {/* Left Editorial Column */}
+          <div className="lg:col-span-7 space-y-5">
+            <div className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
+              RankPilot AI · Organic SEO Growth Platform
+            </div>
+            <h1 className="font-display text-4xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-5xl text-balance">
+              Rank. Convert. Grow.
+            </h1>
+            <p className="max-w-xl text-base leading-relaxed text-slate-600 dark:text-slate-300">
+              Audit websites for technical and on-page issues, review keyword opportunities and Search Console performance, and manage WordPress and WooCommerce SEO updates from one workspace.
+            </p>
           </div>
-          <h1 className="font-display text-4xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-5xl text-balance">
-            Rank. Convert. Grow.
-          </h1>
-          <p className="max-w-xl text-base leading-relaxed text-slate-600 dark:text-slate-300">
-            Audit live websites for technical and on-page SEO, sync Google Search Console and GA4 telemetry, optimize WordPress and WooCommerce pages, and act on prioritized AI SEO plans.
-          </p>
 
-          <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-              <Globe className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="mt-2.5 text-sm font-semibold">Live SEO Audits</h2>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                Multi-page crawling, metadata &amp; heading checks, Core Web Vitals, and broken link detection.
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-              <TrendingUp className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="mt-2.5 text-sm font-semibold">GSC &amp; GA4 Telemetry</h2>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                Verified Search Console clicks, impressions, rank tracking, and Google Analytics 4 conversions.
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-              <CheckCircle2 className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="mt-2.5 text-sm font-semibold">On-Page &amp; Woo Sync</h2>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                Generate AI keyword clusters, review metadata diffs, and deploy approved updates to WordPress.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Auth Card */}
+          {/* Right Auth Card */}
         <div className="lg:col-span-5">
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-800 dark:bg-slate-900">
             <div className="mb-6">
@@ -353,7 +400,47 @@ export function AuthView() {
             </div>
           </div>
         </div>
-      </div>
+        </div>
+
+        {/* Platform Capabilities Showcase */}
+        <section
+          aria-labelledby="platform-capabilities-heading"
+          className="mt-10 border-t border-slate-200/80 pt-8 dark:border-slate-800/80"
+        >
+          <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+            <h2
+              id="platform-capabilities-heading"
+              className="font-display text-base font-semibold tracking-tight text-slate-900 dark:text-slate-100"
+            >
+              Built-in SEO Workspace Capabilities
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Core tools available inside RankPilot AI after sign-in.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+            {LANDING_FEATURES.map(({ title, description, icon: Icon }) => (
+              <article
+                key={title}
+                className="flex items-start gap-3.5 rounded-xl border border-slate-200 bg-white p-4 transition-colors hover:border-indigo-300 hover:bg-indigo-50/20 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-indigo-700/80 dark:hover:bg-slate-900/80"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400">
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    {title}
+                  </h3>
+                  <p className="mt-0.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    {description}
+                  </p>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      </main>
     </div>
   );
 }
