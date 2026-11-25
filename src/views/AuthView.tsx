@@ -22,7 +22,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../context/ToastContext';
 import { firebaseConfigSummary } from '../lib/firebase';
 
-const LANDING_FEATURES = [
+const PRIMARY_FEATURES = [
   {
     title: 'SEO Dashboard',
     description: 'Track website SEO health and growth.',
@@ -53,6 +53,9 @@ const LANDING_FEATURES = [
     description: 'Check PageSpeed, Core Web Vitals and crawlability.',
     icon: Gauge,
   },
+] as const;
+
+const SECONDARY_FEATURES = [
   {
     title: 'AI SEO Recommendations',
     description: 'Get actionable AI-powered SEO suggestions.',
@@ -160,7 +163,7 @@ export function AuthView() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col">
-      <header className="flex items-center justify-between gap-8 border-b border-slate-200 bg-white px-6 py-3.5 dark:border-slate-800 dark:bg-slate-900">
+      <header className="flex items-center justify-between gap-8 border-b border-slate-200 bg-white px-6 py-3 dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
             <Sparkles className="h-4 w-4" />
@@ -180,24 +183,24 @@ export function AuthView() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10 sm:py-12">
-        <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-12 lg:gap-12">
-          {/* Left Editorial Column */}
-          <div className="lg:col-span-7 space-y-5">
+      <main className="mx-auto flex w-full max-w-6xl flex-1 items-center px-4 py-5 sm:px-6 lg:py-6">
+        <div className="grid w-full grid-cols-1 gap-6 lg:grid-cols-12 lg:grid-rows-[auto_1fr] lg:gap-x-10 lg:gap-y-4">
+          {/* Left Top: Hero Intro */}
+          <div className="min-w-0 lg:col-span-7 lg:col-start-1 lg:row-start-1">
             <div className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
               RankPilot AI · Organic SEO Growth Platform
             </div>
-            <h1 className="font-display text-4xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-5xl text-balance">
+            <h1 className="mt-1 font-display text-3xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-4xl lg:text-[2.5rem] lg:leading-[1.1] text-balance">
               Rank. Convert. Grow.
             </h1>
-            <p className="max-w-xl text-base leading-relaxed text-slate-600 dark:text-slate-300">
-              Audit websites for technical and on-page issues, review keyword opportunities and Search Console performance, and manage WordPress and WooCommerce SEO updates from one workspace.
+            <p className="mt-2 max-w-xl text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+              Audit websites for technical and on-page issues, track verified Google rankings, and sync approved WordPress and WooCommerce SEO changes from one workspace.
             </p>
           </div>
 
-          {/* Right Auth Card */}
-        <div className="lg:col-span-5">
-          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-800 dark:bg-slate-900">
+          {/* Right Auth Card (immediately below hero on mobile/tablet, right column on desktop) */}
+          <div className="min-w-0 lg:col-span-5 lg:col-start-8 lg:row-start-1 lg:row-span-2 lg:self-center">
+            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-7 dark:border-slate-800 dark:bg-slate-900">
             <div className="mb-6">
               <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
                 {mode === 'login' && 'Sign in to your workspace'}
@@ -399,47 +402,61 @@ export function AuthView() {
               )}
             </div>
           </div>
-        </div>
-        </div>
-
-        {/* Platform Capabilities Showcase */}
-        <section
-          aria-labelledby="platform-capabilities-heading"
-          className="mt-10 border-t border-slate-200/80 pt-8 dark:border-slate-800/80"
-        >
-          <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
-            <h2
-              id="platform-capabilities-heading"
-              className="font-display text-base font-semibold tracking-tight text-slate-900 dark:text-slate-100"
-            >
-              Built-in SEO Workspace Capabilities
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Core tools available inside RankPilot AI after sign-in.
-            </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-            {LANDING_FEATURES.map(({ title, description, icon: Icon }) => (
-              <article
-                key={title}
-                className="flex items-start gap-3.5 rounded-xl border border-slate-200 bg-white p-4 transition-colors hover:border-indigo-300 hover:bg-indigo-50/20 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-indigo-700/80 dark:hover:bg-slate-900/80"
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400">
-                  <Icon className="h-4 w-4" aria-hidden="true" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    {title}
-                  </h3>
-                  <p className="mt-0.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                    {description}
-                  </p>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
+          {/* Left Bottom: Compact Always-Visible Feature Showcase */}
+          <section
+            aria-label="RankPilot AI SEO capabilities"
+            className="min-w-0 space-y-3 lg:col-span-7 lg:col-start-1 lg:row-start-2"
+          >
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {PRIMARY_FEATURES.map(({ title, description, icon: Icon }) => (
+                <article
+                  key={title}
+                  className="flex items-start gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-800 dark:bg-slate-900"
+                >
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400">
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-[13px] font-semibold leading-tight text-slate-900 dark:text-slate-100">
+                      {title}
+                    </h2>
+                    <p className="mt-0.5 text-xs leading-snug text-slate-500 dark:text-slate-400">
+                      {description}
+                    </p>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className="border-t border-slate-200/80 pt-2.5 dark:border-slate-800/80">
+              <div className="mb-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                AI, Reporting &amp; Integrations
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {SECONDARY_FEATURES.map(({ title, description, icon: Icon }) => (
+                  <article
+                    key={title}
+                    className="flex items-start gap-2.5 rounded-lg border border-slate-200/90 bg-white/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/75"
+                  >
+                    <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400">
+                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-xs font-semibold leading-tight text-slate-900 dark:text-slate-100">
+                        {title}
+                      </h3>
+                      <p className="mt-0.5 text-xs leading-snug text-slate-500 dark:text-slate-400">
+                        {description}
+                      </p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
       </main>
     </div>
   );
