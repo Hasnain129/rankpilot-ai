@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ArrowLeft,
   ArrowRight,
   BarChart3,
   FileText,
@@ -78,7 +79,12 @@ const SECONDARY_FEATURES = [
   },
 ] as const;
 
-export function AuthView() {
+interface AuthViewProps {
+  initialMode?: 'login' | 'signup' | 'forgot';
+  onBackToHome?: () => void;
+}
+
+export function AuthView({ initialMode = 'login', onBackToHome }: AuthViewProps = {}) {
   const {
     signInWithGoogle,
     signInWithEmail,
@@ -91,7 +97,7 @@ export function AuthView() {
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
 
-  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>(initialMode);
   const [name, setName] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [email, setEmail] = useState('');
@@ -99,6 +105,10 @@ export function AuthView() {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMode(initialMode);
+  }, [initialMode]);
 
   useEffect(() => {
     if (authRedirectError) {
@@ -164,14 +174,43 @@ export function AuthView() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col">
       <header className="flex items-center justify-between gap-8 border-b border-slate-200 bg-white px-6 py-3 dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
-            <Sparkles className="h-4 w-4" />
+        {onBackToHome ? (
+          <a
+            href="/"
+            onClick={(e) => {
+              e.preventDefault();
+              onBackToHome();
+            }}
+            className="flex items-center gap-2.5 whitespace-nowrap shrink-0 text-slate-900 dark:text-slate-100"
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <span className="font-display text-base font-bold tracking-tight">RankPilot AI</span>
+          </a>
+        ) : (
+          <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <span className="font-display text-base font-bold tracking-tight">RankPilot AI</span>
           </div>
-          <span className="font-display text-base font-bold tracking-tight">RankPilot AI</span>
-        </div>
+        )}
 
         <div className="flex items-center gap-3 shrink-0">
+          {onBackToHome && (
+            <a
+              href="/"
+              onClick={(e) => {
+                e.preventDefault();
+                onBackToHome();
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 whitespace-nowrap"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Back to Home</span>
+            </a>
+          )}
           <button
             type="button"
             onClick={toggleTheme}

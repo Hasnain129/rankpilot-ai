@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode, useEffect, useState } from 'react';
+import React, { Component, ErrorInfo, ReactNode, useCallback, useEffect, useState } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -10,18 +10,61 @@ import { AuthView } from './views/AuthView';
 import { DashboardView } from './views/DashboardView';
 import { Ga4IntegrationView } from './views/Ga4IntegrationView';
 import { KeywordResearchView } from './views/KeywordResearchView';
+import { LandingPageView } from './views/LandingPageView';
 import {
   OnPageWorkspaceState,
   OptimizationCenterView,
   OptimizationPrefill,
 } from './views/OptimizationCenterView';
 import { ProfileSettingsView } from './views/ProfileSettingsView';
+import { PublicNoticeKind, PublicNoticeView } from './views/PublicNoticeView';
 import { RankTrackerView } from './views/RankTrackerView';
 import { SearchConsoleView } from './views/SearchConsoleView';
 import { SeoAnalyzerView } from './views/SeoAnalyzerView';
 import { SeoReportsView } from './views/SeoReportsView';
 import { TechnicalMonitorView } from './views/TechnicalMonitorView';
 import { WebsitesView } from './views/WebsitesView';
+
+type AppRoute =
+  | '/'
+  | '/login'
+  | '/signup'
+  | '/forgot-password'
+  | '/dashboard'
+  | '/privacy'
+  | '/terms'
+  | '/contact';
+
+function resolveRouteFromLocation(): AppRoute {
+  if (typeof window === 'undefined') return '/';
+  const rawPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  const lower = rawPath.toLowerCase();
+
+  if (lower === '/') return '/';
+  if (lower === '/login' || lower === '/signin' || lower === '/auth') {
+    const modeParam = new URLSearchParams(window.location.search).get('mode');
+    if (modeParam === 'signup') return '/signup';
+    if (modeParam === 'forgot') return '/forgot-password';
+    return '/login';
+  }
+  if (lower === '/signup' || lower === '/register') return '/signup';
+  if (lower === '/forgot-password') return '/forgot-password';
+  if (lower === '/privacy') return '/privacy';
+  if (lower === '/terms') return '/terms';
+  if (lower === '/contact') return '/contact';
+  return '/dashboard';
+}
+
+function isAuthRoute(route: AppRoute): boolean {
+  return route === '/login' || route === '/signup' || route === '/forgot-password';
+}
+
+function isPublicNoticeRoute(route: AppRoute): PublicNoticeKind | null {
+  if (route === '/privacy') return 'privacy';
+  if (route === '/terms') return 'terms';
+  if (route === '/contact') return 'contact';
+  return null;
+}
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -66,10 +109,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 }
 
 function WorkspaceApp() {
-  const { user, authReady } = useAuth();
+  const { user, authReady, authRedirectError } = useAuth();
   const { toast } = useToast();
   const data = useWorkspaceData();
 
+  const [route, setRoute] = useState<AppRoute>(() => resolveRouteFromLocation());
   const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
   const [selectedWebsiteId, setSelectedWebsiteId] = useState<string>('all');
   const [showAddWebsiteModal, setShowAddWebsiteModal] = useState(false);
@@ -87,6 +131,43 @@ function WorkspaceApp() {
   });
   const [technicalPrefillUrl, setTechnicalPrefillUrl] = useState<string | undefined>(undefined);
 
+  const navigate = useCallback((targetPath: string, replace = false) => {
+    if (typeof window === 'undefined') return;
+    if (window.location.pathname !== targetPath || window.location.search) {
+      if (replace) {
+        window.history.replaceState({}, '', targetPath);
+      } else {
+        window.history.pushState({}, '', targetPath);
+      }
+    }
+    setRoute(resolveRouteFromLocation());
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setRoute(resolveRouteFromLocation());
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  // Route protection & OAuth redirect syncing once Firebase auth resolves
+  useEffect(() => {
+    if (!authReady) return;
+    if (route === '/' && authRedirectError) {
+      navigate('/login', true);
+      return;
+    }
+    if (isAuthRoute(route) && user) {
+      navigate('/dashboard', true);
+      return;
+    }
+    if (route === '/dashboard' && !user) {
+      navigate('/login', true);
+    }
+  }, [authReady, user, route, authRedirectError, navigate]);
+
   // Reset scope if currently selected website was deleted
   useEffect(() => {
     if (
@@ -97,6 +178,22 @@ function WorkspaceApp() {
       setSelectedWebsiteId('all');
     }
   }, [selectedWebsiteId, data.websites, data.loading]);
+
+  // Public homepage renders immediately without blocking on auth loading
+  if (route === '/' && !(authReady && authRedirectError)) {
+    return <LandingPageView isAuthenticated={Boolean(user)} onNavigate={navigate} />;
+  }
+
+  const noticeKind = isPublicNoticeRoute(route);
+  if (noticeKind) {
+    return (
+      <PublicNoticeView
+        kind={noticeKind}
+        isAuthenticated={Boolean(user)}
+        onNavigate={navigate}
+      />
+    );
+  }
 
   if (!authReady) {
     return (
@@ -111,8 +208,15 @@ function WorkspaceApp() {
     );
   }
 
-  if (!user) {
-    return <AuthView />;
+  if (!user || isAuthRoute(route)) {
+    const initialMode =
+      route === '/signup' ? 'signup' : route === '/forgot-password' ? 'forgot' : 'login';
+    return (
+      <AuthView
+        initialMode={initialMode}
+        onBackToHome={() => navigate('/')}
+      />
+    );
   }
 
   const resolvedWebsiteId =
